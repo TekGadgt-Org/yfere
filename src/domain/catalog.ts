@@ -191,13 +191,23 @@ function hasKnownRepository(value: string): boolean {
           authority = !/[/?#\s\\]/.test(authorityText);
         }
       } else {
-        authority = !before || /[\s"'(=:]/.test(before);
+        authority = !before || /[\s"'(=:]/.test(before) || (before === '@' && hasDirectUserinfo(lower, at));
       }
       if (authority && hasRepositoryPath(lower, at + host.length)) return true;
       at = lower.indexOf(host, at + host.length);
     }
   }
   return false;
+}
+function hasDirectUserinfo(value: string, hostStart: number): boolean {
+  // Only treat @ as direct userinfo when it has a bounded token before it;
+  // the repository-path check still gates the known-host classification.
+  const at = hostStart - 1;
+  if (at < 1 || value[at] !== '@') return false;
+  let start = at - 1;
+  while (start >= 0 && !/[\s"'(=]/.test(value[start] ?? '')) start--;
+  const userinfo = value.slice(start + 1, at);
+  return userinfo.length > 0 && !/[\\/?#\s"')]/.test(userinfo);
 }
 function hasRepositoryPath(value: string, start: number): boolean {
   let cursor = start;

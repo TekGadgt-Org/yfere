@@ -159,6 +159,28 @@ describe('catalog loading', () => {
     const accepted = ['https://example.test/owner/repo', 'documentation at notgithub.com/owner/repo', 'thisgithub.com/owner/repo is prose', 'github.com.evil/owner/repo', 'public/path and MIME text/plain'];
     for (const description of accepted) expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
   });
+  it('rejects direct userinfo before known-host repository paths while preserving boundaries', () => {
+    const rejected = [
+      'synthetic-user:synthetic-password@github.com/owner/repo',
+      'prefix synthetic-user:synthetic-password@github.com/owner/repo',
+      '(synthetic-user:synthetic-password@github.com/owner/repo)',
+      'synthetic-user@github.com/owner/repo',
+      'token=synthetic-user:synthetic-password@github.com/owner/repo',
+      'synthetic-user:synthetic-password@GITHUB.COM:443/owner/repo',
+    ];
+    for (const description of rejected) expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).toThrow(CatalogValidationError);
+    for (const description of ['user@gitlab.com/team/project', 'user@bitbucket.org/team/project']) {
+      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).toThrow(CatalogValidationError);
+    }
+    const accepted = [
+      'contact synthetic-user@github.com',
+      'synthetic-user:synthetic-password@example.test/owner/repo',
+      'documentation synthetic-user@notgithub.com/owner/repo',
+      'github.com', 'github.com/owner', 'github.com/owner/',
+      'github.com.evil/owner/repo', 'prefix @github.com/owner/repo',
+    ];
+    for (const description of accepted) expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
+  });
   it('normalizes post-isolation non-JSON failures without reflecting runtime text', () => {
     const valid = { schemaVersion: 'catalog-schema-v1', canonicalizationVersion: 'canonical-json-v1', recordVersions: [], documentVersions: [], personas: [], models: [], skills: [], thews: [] };
     expect(() => canonicalizeCatalog({ ...valid, extra: 1n } as never)).toThrow(new CatalogValidationError('<catalog>', 'invalid catalog input'));
