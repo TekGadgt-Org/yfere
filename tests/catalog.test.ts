@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CatalogValidationError, loadCatalogSnapshot, parseCatalogDocument } from '../src/domain/catalog.js';
+import { createHash } from 'node:crypto';
+import { CatalogValidationError, canonicalizeCatalog, loadCatalogSnapshot, normalizeCatalogDocuments, parseCatalogDocument } from '../src/domain/catalog.js';
 
 const skill = { id: 'lint', version: '1.0.0', contentHash: 'a'.repeat(64), trust: 'reviewed', description: 'Lint code', positiveExamples: ['lint'], negativeExamples: ['deploy'], requiredCapabilities: [], requiredTools: [], prerequisites: [], sideEffectClass: 'none', conflicts: [], instructionTokenEstimate: 10, artifactFormats: ['text'] };
 const model = { id: 'fixture-model', version: '1.0.0', provider: 'fixture', requestedModel: 'fixture-model', transport: 'offline-fixture', availability: 'available', authorization: 'authorized', modalities: ['text'], features: [], tools: [], contextLimit: 1000, dataHandling: 'synthetic-only', authorizationScope: 'offline', cost: { input: 'unknown', output: 0 }, operationalEvidenceIds: [] };
@@ -31,5 +32,20 @@ describe('catalog loading', () => {
     const a = loadCatalogSnapshot([{ format: 'json', text: doc('skills', [skill]) }, { format: 'json', text: doc('models', [model]) }, { format: 'json', text: doc('personas', [persona]) }]);
     const b = loadCatalogSnapshot([{ format: 'json', text: doc('skills', [{ ...skill, version: '1.0.1' }]) }, { format: 'json', text: doc('models', [model]) }, { format: 'json', text: doc('personas', [persona]) }]);
     expect(a.snapshotId).not.toBe(b.snapshotId);
+  });
+  it('closes runtime normalization and validates skill dependency sets', () => {
+    expect(() => normalizeCatalogDocuments([{ kind: '__proto__', version: '1.0.0', records: [] }])).toThrow(CatalogValidationError);
+    expect(() => normalizeCatalogDocuments([{ kind: 'skills', version: '1.0.0', records: [{ ...skill, prerequisites: ['missing'] }] }])).toThrow(/skills\.records\[0\]\.prerequisites\[0\]/);
+    expect(() => loadCatalogSnapshot([{ format: 'json', text: doc('skills', [{ ...skill, prerequisites: ['lint', 'lint'] }]) }])).toThrow(/duplicate reference/);
+  });
+  it('bounds hostile inputs and exposes all digest material', () => {
+    let nested: unknown = null; for (let i = 0; i < 140; i++) nested = { x: nested };
+    const deep = JSON.stringify({ kind: 'skills', version: '1.0.0', records: [], extra: nested });
+    expect(() => parseCatalogDocument(deep, 'json')).toThrow(CatalogValidationError);
+    expect(() => parseCatalogDocument(JSON.stringify({ kind: 'skills', version: '1.0.0', records: [{ ...skill, description: 'sk_live_12345678901234567890' }] }), 'json', 'bad\nsource')).toThrow(/bad_source/);
+    const snapshot = loadCatalogSnapshot([{ format: 'json', text: doc('skills', [skill]) }]);
+    const { snapshotId, ...payload } = snapshot;
+    expect(snapshot.recordVersions).toEqual(['1.0.0']);
+    expect(snapshotId).toBe(createHash('sha256').update(canonicalizeCatalog(payload)).digest('hex'));
   });
 });
