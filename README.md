@@ -30,7 +30,37 @@ The public Phase 2 API is exported from `src/domain/index.ts`:
 
 For example, application code can load a checked-in source and use the resulting immutable snapshot:
 
-    import { loadCatalogSnapshot } from './src/domain/index.js';
+    import { loadCatalogSnapshot } from './dist/domain/index.js';
+
+    const jsonText = JSON.stringify({
+      kind: 'skills', version: '1.0.0', records: [{
+        id: 'review-skill', version: '1.0.0',
+        contentHash: '0000000000000000000000000000000000000000000000000000000000000000',
+        trust: 'reviewed', description: 'A documented review skill',
+        positiveExamples: ['Review the change'], negativeExamples: [],
+        requiredCapabilities: [], requiredTools: [], prerequisites: [],
+        sideEffectClass: 'none', conflicts: [], instructionTokenEstimate: 10,
+        artifactFormats: ['markdown'],
+      }],
+    });
+    const yamlText = `kind: models
+version: 1.0.0
+records:
+  - id: fixture-model
+    version: 1.0.0
+    provider: fixture
+    requestedModel: fixture-model
+    transport: offline-fixture
+    availability: available
+    authorization: authorized
+    modalities: [text]
+    features: []
+    tools: []
+    contextLimit: 1024
+    dataHandling: synthetic-only
+    authorizationScope: offline
+    cost: { input: 0, output: 0 }
+    operationalEvidenceIds: []`;
 
     const snapshot = loadCatalogSnapshot([
       { source: 'catalog/skills.json', format: 'json', text: jsonText },
