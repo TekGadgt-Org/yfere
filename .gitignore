@@ -1,0 +1,6 @@
+node_modules
+dist
+*.local.json
+__pycache__
+.archive-stage-2
+.research-prior-art

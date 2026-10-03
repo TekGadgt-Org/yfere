@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": 1,
+      "url": "https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/SKILL.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 2,
+      "url": "https://docs.typesafe.ai/llms.txt",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 3,
+      "url": "https://docs.typesafe.ai/api.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 4,
+      "url": "https://docs.typesafe.ai/sdk/javascript.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 5,
+      "url": "https://docs.typesafe.ai/primitives/choice.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 6,
+      "url": "https://docs.typesafe.ai/patterns/fan-out.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 7,
+      "url": "https://docs.typesafe.ai/models.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 8,
+      "url": "https://docs.typesafe.ai/confidence.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 9,
+      "url": "https://docs.typesafe.ai/migrating-to-v1.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 10,
+      "url": "https://docs.typesafe.ai/sdk/javascript/api/interfaces/RetryPolicy.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 11,
+      "url": "https://docs.typesafe.ai/sdk/javascript/api/interfaces/RequestOptions.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 12,
+      "url": "https://docs.typesafe.ai/sdk/javascript/api/interfaces/SystemOneResult.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 13,
+      "url": "https://docs.typesafe.ai/sdk/javascript/api/interfaces/Usage.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 14,
+      "url": "https://docs.typesafe.ai/sdk/javascript/api/interfaces/TypeSafeClientConfig.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 15,
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-js/v0.6.0/src/client.ts",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 16,
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-js/v0.6.0/src/types.ts",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 17,
+      "url": "https://docs.typesafe.ai/introduction.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 18,
+      "url": "https://docs.typesafe.ai/cookbooks/skill_suggestion.md",
+      "title": "",
+      "accessed": "2026-09-18"
+    },
+    {
+      "id": 19,
+      "url": "https://raw.githubusercontent.com/typesafe-ai/typesafe-sdk-js/v0.6.0/src/api-promise.ts",
+      "title": "",
+      "accessed": "2026-09-18"
+    }
+  ]
+}
