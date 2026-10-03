@@ -76,6 +76,10 @@ function boundary<T>(operation: () => T): T {
   try { return operation(); }
   catch (error) { if (error instanceof CatalogValidationError) throw error; issue('<catalog>', 'invalid catalog input'); }
 }
+function canonicalBoundary(operation: () => string): string {
+  try { return operation(); }
+  catch { throw new CatalogValidationError('<catalog>', 'invalid catalog input'); }
+}
 
 function freeze<T>(value: T): T { if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.freeze(value); for (const child of Object.values(value as Record<string, unknown>)) freeze(child); } return value; }
 function clone<T>(value: T): T { if (typeof structuredClone === 'function') return structuredClone(value); return JSON.parse(JSON.stringify(value)) as T; }
@@ -87,13 +91,13 @@ function canonical(value: unknown): string {
 function codeUnitCompare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
 function canonicalCatalogIdentity(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonical(snapshot); }
 export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string {
-  return boundary(() => canonicalCatalogIdentity(snapshot));
+  return canonicalBoundary(() => canonicalCatalogIdentity(snapshot));
 }
 function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
   // Source labels are diagnostic metadata, not trusted content. Never preserve
   // a label which itself resembles a credential or a local/repository path.
-  if (!text || text.length > 128 || secretValue.test(text) || privateValue.test(text) || /(?:private|repository)/i.test(text)) return fallback;
+  if (!text || text.length > 128 || sensitiveValue(text)) return fallback;
   const clean = text.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clean) ? clean : fallback;
 }
@@ -125,8 +129,40 @@ const MAX_RECORDS = 50_000;
 const MAX_CATALOG_BYTES = 8_000_000;
 const MAX_SCAN_NODES = 100_000;
 const MAX_SCAN_DEPTH = 128;
-const secretValue = /(?:^|[=:_\s"'])authorization\s*:\s*bearer(?:\s|$)|(?:^|[=:_\s"'])bearer(?:\s|$)|[a-z][a-z0-9+.-]*:\/\/[^\/?#\s]*@|(?:^|[\s"'(])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)(?:[\\/]|$)|[A-Za-z]:\\Users(?:\\|$)|(?:workspace|private|\.git|\.ssh|\.env)[\\/]|(?:git@|ssh:\/\/)|(?:owner|user|org)\/(?:private|[^\s/]*repository)(?:[\s"')]|$)|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[a-z0-9_.-]+\/(?:private|[^\s/]*repository)(?:[\s"')]|$))|(?:^|[=:_\s"'])(?:ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{8,}|(?:^|[=:_\s"'])sk[-_](?:live|test)(?:[-_]|\b)|(?:^|[=:_\s"'])sk[-_][A-Za-z0-9]{8,}|(?:^|[=:_\s"'])pk[-_](?:live|test)[-_][A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
-const privateValue = /(?:^|[\s"'])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)\/|[A-Za-z]:\\Users\\|git@|ssh:\/\/|file:\/\/|(?:github|gitlab|bitbucket)\.com\/[^/\s]+\/[^/\s]+(?:\.git)?|(?:workspace|private)[\/])/i;
+function hasUrlUserinfo(value: string): boolean {
+  const marker = value.indexOf('://');
+  if (marker <= 0 || marker > 32) return false;
+  for (let i = 0; i < marker; i++) {
+    const c = value.charCodeAt(i);
+    if (!((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (i > 0 && ((c >= 48 && c <= 57) || c === 43 || c === 45 || c === 46)))) return false;
+  }
+  let end = value.length;
+  for (const delimiter of ['/', '?', '#', ' ', '\t', '\n']) { const at = value.indexOf(delimiter, marker + 3); if (at >= 0 && at < end) end = at; }
+  return value.slice(marker + 3, end).includes('@');
+}
+function pathSegments(value: string): string[] {
+  const segments: string[] = []; let start = 0;
+  for (let i = 0; i <= value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (i === value.length || c === 47 || c === 92 || c === 32 || c === 34 || c === 39 || c === 41) {
+      if (i > start) segments.push(value.slice(start, i).toLowerCase());
+      start = i + 1;
+    }
+  }
+  return segments;
+}
+function sensitiveValue(value: string): boolean {
+  const lower = value.toLowerCase(); const trimmed = lower.trim();
+  if (trimmed === 'bearer' || trimmed.startsWith('bearer ') || trimmed.startsWith('authorization: bearer')) return true;
+  if (hasUrlUserinfo(value) || lower.startsWith('git@') || lower.startsWith('ssh://') || lower.startsWith('file://')) return true;
+  if (lower.includes('-----begin ') && lower.includes(' private key-----')) return true;
+  for (const prefix of ['ghp', 'github_pat', 'xoxb', 'xoxa', 'xoxp', 'xoxr', 'xoxs', 'aiza', 'sk_live', 'sk-test', 'sk_test', 'pk_live', 'pk-test', 'pk_test']) if (trimmed.startsWith(`${prefix}_`) || trimmed.startsWith(`${prefix}-`)) return true;
+  if (/^akia[0-9a-z]{16}/i.test(trimmed)) return true;
+  if (lower.startsWith('~/') || lower.startsWith('./') || lower.startsWith('../') || /^[a-z]:\\users(?:\\|$)/i.test(value)) return true;
+  const segments = pathSegments(value); const roots = new Set(['opt', 'var', 'home', 'users', 'root', 'tmp', 'private', 'workspace', '.git', '.ssh', '.env']);
+  if (segments.some(segment => roots.has(segment))) return true;
+  return segments.length >= 2 && segments.some(segment => segment === 'private' || segment.includes('repository'));
+}
 function rejectSecretLike(value: unknown, source = '<input>'): void {
   const pending: Array<{ value: unknown; depth: number; path: string }> = [{ value, depth: 0, path: '<document>' }];
   const seen = new WeakSet<object>(); let nodes = 0;
@@ -134,9 +170,9 @@ function rejectSecretLike(value: unknown, source = '<input>'): void {
     const current = pending.pop()!; if (++nodes > MAX_SCAN_NODES || current.depth > MAX_SCAN_DEPTH) issue(`${source}.<document>`, 'catalog document exceeds safety limits');
     if (typeof current.value === 'string') {
       const valueText = current.value;
-      const obviousCredential = /^\s*(?:authorization\s*:\s*)?bearer(?:\s|$)/i.test(valueText) || /(?:^|[=:_\s"'])(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[-_]/i.test(valueText);
-      if (obviousCredential || valueText.length <= 1024 || /[\\/\\@:]/.test(valueText)) {
-        if (secretValue.test(valueText) || privateValue.test(valueText)) issue(`${source}.${current.path}`, 'secret-shaped value is not permitted');
+      const obviousCredential = sensitiveValue(valueText);
+      if (obviousCredential || valueText.length <= 1024 || valueText.includes('/') || valueText.includes('\\') || valueText.includes('@') || valueText.includes(':')) {
+        if (sensitiveValue(valueText)) issue(`${source}.${current.path}`, 'secret-shaped value is not permitted');
       }
       continue;
     }

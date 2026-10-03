@@ -115,6 +115,17 @@ describe('catalog loading', () => {
     const source = [{ format: 'json' as const, text: JSON.stringify(runtime[0]) }];
     expect(normalizeCatalogDocuments(runtime).snapshotId).toBe(loadCatalogSnapshot(source).snapshotId);
   });
+  it('scans allowed slash-bearing values linearly at ordinary and near-limit sizes', () => {
+    for (const size of [1_000, 10_000, 99_000]) {
+      const started = performance.now();
+      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description: 'x'.repeat(size) + '/safe' }]), 'json')).not.toThrow();
+      expect(performance.now() - started).toBeLessThan(2_000);
+    }
+    const records = Array.from({ length: 80 }, (_, i) => ({ ...skill, id: `large-${i}`, description: 'x'.repeat(98_000) + '/safe' }));
+    const started = performance.now();
+    expect(normalizeCatalogDocuments([{ kind: 'skills', version: '1.0.0', records }]).skills).toHaveLength(80);
+    expect(performance.now() - started).toBeLessThan(10_000);
+  }, 20_000);
   it('redacts hostile canonicalization accessors', () => {
     expect(() => canonicalizeCatalog({ get schemaVersion() { throw new Error('attacker-controlled getter'); } } as never)).toThrow(CatalogValidationError);
     expect(() => canonicalizeCatalog(new Proxy({}, { ownKeys: () => { throw new Error('attacker-controlled ownKeys'); } }) as never)).toThrow(CatalogValidationError);
