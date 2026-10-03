@@ -1,1 +1,1 @@
-{"overrides":{"receiptsMs":2592000000}}
+{"overrides":{"retention":{"runReceiptTtl":2592000000}}}

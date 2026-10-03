@@ -1,14 +1,57 @@
 import { describe, expect, it } from 'vitest';
-import { classifyHost, DEFAULT_RETENTION, effectiveConfig, parseConfig } from '../src/config/config.js';
+import { classifyHost, DEFAULT_POLICY, effectiveConfig, parseConfig } from '../src/config/config.js';
 import { isAllowedInput } from '../src/policy/classification.js';
 import { assertOfflineRoute } from '../src/runtime/network.js';
+
 describe('offline configuration', () => {
- it('uses approved defaults', () => expect(DEFAULT_RETENTION).toMatchObject({receiptsMs:2592000000,redactedTelemetryMs:7776000000,rawEnabled:false,rawMs:0}));
- it('rejects profile/provider overrides and implicit raw', () => { expect(() => effectiveConfig({provider:{receiptsMs:1}})).toThrow(); expect(() => effectiveConfig({overrides:{rawMs:86400000}})).toThrow(); });
- it('classifies hosts and fails closed', () => { expect(classifyHost('linux','x64').lane).toBe('full'); expect(classifyHost('linux','arm64').lane).toBe('smoke'); expect(classifyHost('win32','x64').nativeExecution).toBe('fail-closed'); });
- it('has stable and changing digests', () => { const a=effectiveConfig({}), b=effectiveConfig({}), c=effectiveConfig({overrides:{receiptsMs:86400000}}); expect(a.policyDigest).toBe(b.policyDigest); expect(a.policyDigest).not.toBe(c.policyDigest); });
- it('rejects unknown secret-bearing configuration and disables network', () => { expect(() => effectiveConfig({secret:'never-print'})).toThrow(); expect(JSON.stringify(effectiveConfig({}))).toContain('disabled'); });
- it('accepts YAML through the same closed schema', () => { expect(parseConfig('overrides:\n  receiptsMs: 86400000\n', 'yaml')).toEqual({overrides:{receiptsMs:86400000}}); });
+  it('uses the approved complete defaults', () => {
+    const config = effectiveConfig({});
+    expect(config.policy).toEqual(DEFAULT_POLICY);
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.policy)).toBe(true);
+  });
+  it('rejects invalid minima and ordered retention/size combinations', () => {
+    const invalid = [
+      { retention: { runReceiptTtl: 0 } },
+      { limits: { rawObjectBytes: 1023 } },
+      { limits: { rawObjectBytes: 2_000, rawBytesPerRun: 1_000 } },
+      { retention: { acceptedApplyBackTtl: 7_200_000, artifactTtl: 3_600_000 } },
+      { retention: { rawTtl: 2_592_000_000, runReceiptTtl: 3_600_000 } },
+      { sweeps: { rawInterval: 86_400_001, artifactReceiptInterval: 60_000 } },
+    ];
+    for (const retention of invalid) expect(() => effectiveConfig({ overrides: retention })).toThrow();
+  });
+  it('requires explicit raw enablement and rejects malformed roots', () => {
+    expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: false, rawTtl: 3_600_000 } } })).toThrow();
+    expect(() => effectiveConfig(null)).toThrow();
+    expect(() => parseConfig('null', 'json')).toThrow();
+    expect(() => parseConfig('null', 'yaml')).toThrow();
+    expect(() => parseConfig('[]', 'json')).toThrow();
+  });
+  it('derives host authority from the runtime and fails closed outside full hosts', () => {
+    expect(classifyHost('linux', 'x64')).toMatchObject({ lane: 'full', nativeExecution: 'allowed' });
+    expect(classifyHost('linux', 'arm64')).toMatchObject({ lane: 'smoke', nativeExecution: 'fail-closed' });
+    expect(classifyHost('win32', 'x64')).toMatchObject({ lane: 'unsupported', nativeExecution: 'fail-closed' });
+    expect(((effectiveConfig as any)({}, classifyHost('win32', 'x64')) as any).host.nativeExecution).not.toBe('fail-closed');
+    expect(effectiveConfig({}).host.nativeExecution).toBe(classifyHost().nativeExecution);
+  });
+  it('digests all authority and prevents mutation', () => {
+    const a = effectiveConfig({});
+    const b = effectiveConfig({ overrides: { limits: { rawObjectBytes: 20_480 } } });
+    expect(a.policyDigest).not.toBe(b.policyDigest);
+    expect(() => ((a as any).network.default = 'allowed')).toThrow();
+    expect((a.network as any).default).toBe('denied');
+  });
+  it('rejects unknown secret-bearing configuration and disables network', () => {
+    expect(() => effectiveConfig({ secret: 'never-print' })).toThrow();
+    expect(JSON.stringify(effectiveConfig({}))).toContain('disabled');
+  });
+  it('accepts YAML through the same closed schema', () => {
+    expect(parseConfig('overrides:\n  retention:\n    runReceiptTtl: 86400000\n', 'yaml')).toEqual({ overrides: { retention: { runReceiptTtl: 86400000 } } });
+  });
 });
-describe('classification', () => { it.each(['synthetic','public','reviewed-minimized'])('%s allowed', v => expect(isAllowedInput(v)).toBe(true)); it.each(['private','proprietary','sensitive','unknown'])('%s denied', v => expect(isAllowedInput(v)).toBe(false)); });
+describe('classification', () => {
+  it.each(['synthetic', 'public', 'reviewed-minimized'])('%s allowed', v => expect(isAllowedInput(v)).toBe(true));
+  it.each(['private', 'proprietary', 'sensitive', 'unknown'])('%s denied', v => expect(isAllowedInput(v)).toBe(false));
+});
 describe('routes', () => it('constructs no live route', () => expect(() => assertOfflineRoute('provider')).toThrow('offline mode')));
