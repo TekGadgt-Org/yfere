@@ -159,6 +159,12 @@ describe('catalog loading', () => {
     const accepted = ['https://example.test/owner/repo', 'documentation at notgithub.com/owner/repo', 'thisgithub.com/owner/repo is prose', 'github.com.evil/owner/repo', 'public/path and MIME text/plain'];
     for (const description of accepted) expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
   });
+  it('treats closing parentheses as URL-authority boundaries for every known host', () => {
+    for (const host of ['github.com', 'gitlab.com', 'bitbucket.org']) {
+      const description = `https://example.test)${host}/owner/repo`;
+      expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
+    }
+  });
   it('rejects direct userinfo before known-host repository paths while preserving boundaries', () => {
     const rejected = [
       'synthetic-user:synthetic-password@github.com/owner/repo',

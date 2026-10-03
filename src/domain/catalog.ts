@@ -185,6 +185,9 @@ function hasKnownRepository(value: string): boolean {
   // candidate even when the preceding token was path-like or malformed.
   const isTokenBoundary = (c: string): boolean => /[\s"'(=\/?#\\)]/.test(c);
   const isInvalidUserinfo = (c: string): boolean => /[\\/?#\s"')]/.test(c);
+  // Authority ends at URL syntax separators, whitespace, a backslash, or the
+  // closing parenthesis that terminates a surrounding prose expression.
+  const isUrlAuthorityBoundary = (c: string): boolean => /[/?#\s\\)]/.test(c);
   for (let i = 0; i < lower.length; i++) {
     const c = lower[i]!;
     const isSchemeDelimiter = c === '/' && (lower[i - 1] === ':' || (lower[i - 1] === '/' && lower[i - 2] === ':'));
@@ -197,7 +200,7 @@ function hasKnownRepository(value: string): boolean {
     if (i >= 2 && lower.slice(i - 2, i + 1) === '://') {
       urlScheme = lower.slice(tokenStart, i - 2);
       urlAuthority = urlScheme === 'http' || urlScheme === 'https' || urlScheme === 'git' || urlScheme === 'ssh';
-    } else if (urlAuthority && /[/?#\s\\]/.test(c)) {
+    } else if (urlAuthority && isUrlAuthorityBoundary(c)) {
       urlAuthority = false;
     }
     for (const host of ['github.com', 'gitlab.com', 'bitbucket.org']) {
