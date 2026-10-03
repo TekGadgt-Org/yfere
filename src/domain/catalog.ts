@@ -86,7 +86,9 @@ function canonical(value: unknown): string {
 }
 function codeUnitCompare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
 function canonicalCatalogIdentity(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonical(snapshot); }
-export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonicalCatalogIdentity(snapshot); }
+export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string {
+  return boundary(() => canonicalCatalogIdentity(snapshot));
+}
 function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
   // Source labels are diagnostic metadata, not trusted content. Never preserve
@@ -123,7 +125,7 @@ const MAX_RECORDS = 50_000;
 const MAX_CATALOG_BYTES = 8_000_000;
 const MAX_SCAN_NODES = 100_000;
 const MAX_SCAN_DEPTH = 128;
-const secretValue = /(?:^|[=:_\s"'])authorization\s*:\s*bearer(?:\s|$)|(?:^|[=:_\s"'])bearer(?:\s|$)|[a-z][a-z0-9+.-]*:\/\/[^\/?#\s]*@|(?:^|[\s"'(])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)(?:[\/]|$)|[A-Za-z]:\\Users(?:\\|$)|(?:workspace|private|\.git|\.ssh|\.env)[\/]|(?:git@|ssh:\/\/)|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?(?:[\s"')]|$))|(?:^|[=:_\s"'])(?:ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{8,}|(?:^|[=:_\s"'])sk[-_](?:live|test)(?:[-_]|\b)|(?:^|[=:_\s"'])sk[-_][A-Za-z0-9]{8,}|(?:^|[=:_\s"'])pk[-_](?:live|test)[-_][A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
+const secretValue = /(?:^|[=:_\s"'])authorization\s*:\s*bearer(?:\s|$)|(?:^|[=:_\s"'])bearer(?:\s|$)|[a-z][a-z0-9+.-]*:\/\/[^\/?#\s]*@|(?:^|[\s"'(])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)(?:[\\/]|$)|[A-Za-z]:\\Users(?:\\|$)|(?:workspace|private|\.git|\.ssh|\.env)[\\/]|(?:git@|ssh:\/\/)|(?:owner|user|org)\/(?:private|[^\s/]*repository)(?:[\s"')]|$)|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[a-z0-9_.-]+\/(?:private|[^\s/]*repository)(?:[\s"')]|$))|(?:^|[=:_\s"'])(?:ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{8,}|(?:^|[=:_\s"'])sk[-_](?:live|test)(?:[-_]|\b)|(?:^|[=:_\s"'])sk[-_][A-Za-z0-9]{8,}|(?:^|[=:_\s"'])pk[-_](?:live|test)[-_][A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
 const privateValue = /(?:^|[\s"'])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)\/|[A-Za-z]:\\Users\\|git@|ssh:\/\/|file:\/\/|(?:github|gitlab|bitbucket)\.com\/[^/\s]+\/[^/\s]+(?:\.git)?|(?:workspace|private)[\/])/i;
 function rejectSecretLike(value: unknown, source = '<input>'): void {
   const pending: Array<{ value: unknown; depth: number; path: string }> = [{ value, depth: 0, path: '<document>' }];
@@ -148,18 +150,10 @@ function rejectSecretLike(value: unknown, source = '<input>'): void {
   }
 }
 function measureCatalogBytes(value: unknown): number {
-  let total = 0; const pending: unknown[] = [value]; const seen = new WeakSet<object>();
-  while (pending.length) {
-    const current = pending.pop();
-    if (typeof current === 'string') total += new TextEncoder().encode(current).byteLength;
-    else if (typeof current === 'number' || typeof current === 'boolean' || current === null) total += String(current).length;
-    else if (current && typeof current === 'object' && !seen.has(current)) {
-      seen.add(current); total += 2;
-      for (const [key, child] of Object.entries(current as Record<string, unknown>)) { total += new TextEncoder().encode(key).byteLength + 3; pending.push(child); }
-    }
-    if (total > MAX_CATALOG_BYTES) return total;
-  }
-  return total;
+  // This is the single aggregate policy representation. Parsed source documents
+  // and direct runtime documents both become the same canonical JSON bytes.
+  try { return new TextEncoder().encode(canonical(value)).byteLength; }
+  catch { issue('<documents>', 'invalid catalog document'); }
 }
 function rejectDuplicates(values: readonly string[], path: string): void {
   if (new Set(values).size !== values.length) issue(path, 'duplicate reference');
@@ -191,6 +185,13 @@ function normalizeCatalogDocumentsInternal(documents: readonly unknown[]): Catal
   const documentVersions: Array<{ kind: DocumentKind; version: string }> = [];
   if (!Array.isArray(documents)) issue('<documents>', 'invalid catalog documents');
   if (documents.length > MAX_DOCUMENTS) issue('<documents>', 'catalog exceeds document limit');
+  let declaredRecords = 0;
+  for (const input of documents) {
+    if (input && typeof input === 'object' && Array.isArray((input as { records?: unknown }).records)) {
+      declaredRecords += (input as { records: unknown[] }).records.length;
+      if (declaredRecords > MAX_RECORDS) issue('<documents>.records', 'catalog exceeds record limit');
+    }
+  }
   if (measureCatalogBytes(documents) > MAX_CATALOG_BYTES) issue('<documents>', 'catalog exceeds byte limit');
   let records = 0;
   let nodes = 0;
@@ -251,6 +252,8 @@ function loadCatalogSnapshotInternal(sources: readonly CatalogSource[]): Catalog
   let bytes = 0;
   const documents = sources.map((source, index) => {
     if (!source || typeof source !== 'object' || typeof source.text !== 'string' || (source.format !== 'json' && source.format !== 'yaml')) issue(`sources[${index}]`, 'invalid catalog source');
+    // Raw source is only an availability guard; canonical aggregate accounting
+    // is applied again to the parsed documents by normalizeCatalogDocumentsInternal.
     bytes += new TextEncoder().encode(source.text).byteLength;
     if (bytes > MAX_CATALOG_BYTES) issue(`sources[${index}].text`, 'catalog exceeds byte limit');
     return parseCatalogDocument(source.text, source.format, source.source ?? '<input>');

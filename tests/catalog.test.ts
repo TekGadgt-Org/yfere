@@ -101,4 +101,23 @@ describe('catalog loading', () => {
     expect(() => normalizeCatalogDocuments([{ get kind() { throw new Error('attacker-controlled accessor'); } }])).not.toThrow(/attacker-controlled/);
     expect(() => loadCatalogSnapshot([{ get text() { throw new Error('attacker-controlled source'); }, format: 'json' } as never])).toThrow(CatalogValidationError);
   });
+  it('accepts ordinary slash text while rejecting contextual repository paths', () => {
+    for (const description of ['foo/bar', 'ordinary/path-like text', 'input/output mapping', 'text/plain']) {
+      expect((parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0] as any).description).toBe(description);
+    }
+    for (const description of ['owner/private-repository', 'example.test/owner/private-repository']) {
+      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).toThrow(/secret-shaped/);
+    }
+  });
+  it('uses byte-identical aggregate accounting for escaped direct and loaded documents', () => {
+    const record = { ...skill, description: 'quote " — multibyte punctuation' };
+    const runtime = [{ kind: 'skills' as const, version: '1.0.0', records: [record] }];
+    const source = [{ format: 'json' as const, text: JSON.stringify(runtime[0]) }];
+    expect(normalizeCatalogDocuments(runtime).snapshotId).toBe(loadCatalogSnapshot(source).snapshotId);
+  });
+  it('redacts hostile canonicalization accessors', () => {
+    expect(() => canonicalizeCatalog({ get schemaVersion() { throw new Error('attacker-controlled getter'); } } as never)).toThrow(CatalogValidationError);
+    expect(() => canonicalizeCatalog(new Proxy({}, { ownKeys: () => { throw new Error('attacker-controlled ownKeys'); } }) as never)).toThrow(CatalogValidationError);
+    expect(() => canonicalizeCatalog(new Proxy({}, { ownKeys: () => { throw new Error('attacker-controlled ownKeys'); } }) as never)).not.toThrow(/attacker-controlled/);
+  });
 });
