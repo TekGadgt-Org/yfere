@@ -91,7 +91,13 @@ function canonical(value: unknown): string {
 function codeUnitCompare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
 function canonicalCatalogIdentity(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonical(snapshot); }
 export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string {
-  return canonicalBoundary(() => canonicalCatalogIdentity(snapshot));
+  // First isolate caller-controlled accessors/proxies.  Only the second stage
+  // operates on ordinary data, so a validation error raised by trusted
+  // canonicalization is not confused with an attacker-controlled throw.
+  let isolated: Omit<CatalogSnapshot, 'snapshotId'>;
+  try { isolated = clone(snapshot); }
+  catch { throw new CatalogValidationError('<catalog>', 'invalid catalog input'); }
+  return canonicalCatalogIdentity(isolated);
 }
 function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
@@ -156,12 +162,55 @@ function sensitiveValue(value: string): boolean {
   if (trimmed === 'bearer' || trimmed.startsWith('bearer ') || trimmed.startsWith('authorization: bearer')) return true;
   if (hasUrlUserinfo(value) || lower.startsWith('git@') || lower.startsWith('ssh://') || lower.startsWith('file://')) return true;
   if (lower.includes('-----begin ') && lower.includes(' private key-----')) return true;
-  for (const prefix of ['ghp', 'github_pat', 'xoxb', 'xoxa', 'xoxp', 'xoxr', 'xoxs', 'aiza', 'sk_live', 'sk-test', 'sk_test', 'pk_live', 'pk-test', 'pk_test']) if (trimmed.startsWith(`${prefix}_`) || trimmed.startsWith(`${prefix}-`)) return true;
+  if (hasKnownRepository(value) || hasDelimitedCredential(value)) return true;
   if (/^akia[0-9a-z]{16}/i.test(trimmed)) return true;
   if (lower.startsWith('~/') || lower.startsWith('./') || lower.startsWith('../') || /^[a-z]:\\users(?:\\|$)/i.test(value)) return true;
   const segments = pathSegments(value); const roots = new Set(['opt', 'var', 'home', 'users', 'root', 'tmp', 'private', 'workspace', '.git', '.ssh', '.env']);
   if (segments.some(segment => roots.has(segment))) return true;
   return segments.length >= 2 && segments.some(segment => segment === 'private' || segment.includes('repository'));
+}
+function hasKnownRepository(value: string): boolean {
+  const lower = value.toLowerCase();
+  for (const host of ['github.com', 'gitlab.com', 'bitbucket.org']) {
+    let at = lower.indexOf(host);
+    while (at >= 0) {
+      const before = at === 0 ? '' : lower[at - 1];
+      if (!before || /[\s"'(=:]/.test(before)) {
+        let cursor = at + host.length;
+        if (lower[cursor] === '/') {
+          cursor++;
+          const ownerStart = cursor;
+          while (cursor < lower.length && !/[\/\\\s"')]/.test(lower[cursor] ?? '')) cursor++;
+          if (cursor > ownerStart && lower[cursor] === '/') {
+            cursor++;
+            const repoStart = cursor;
+            while (cursor < lower.length && !/[\/\\\s"')]/.test(lower[cursor] ?? '')) cursor++;
+            if (cursor > repoStart) return true;
+          }
+        }
+      }
+      at = lower.indexOf(host, at + host.length);
+    }
+  }
+  return false;
+}
+function hasDelimitedCredential(value: string): boolean {
+  const lower = value.toLowerCase();
+  const prefixes = ['ghp', 'github_pat', 'xoxb', 'xoxa', 'xoxp', 'xoxr', 'xoxs', 'aiza', 'sk', 'pk'];
+  for (let i = 0; i < lower.length; i++) {
+    if (i > 0 && !/[=:_\s"'(]/.test(lower[i - 1] ?? '')) continue;
+    if (lower.startsWith('akia', i) && /^[a-z0-9]{16}/.test(lower.slice(i + 4))) return true;
+    for (const prefix of prefixes) {
+      if (!lower.startsWith(prefix, i)) continue;
+      let end = i + prefix.length;
+      if ((prefix === 'sk' || prefix === 'pk') && !['-', '_'].includes(lower[end] ?? '')) continue;
+      if (prefix !== 'sk' && prefix !== 'pk' && !['-', '_'].includes(lower[end] ?? '')) continue;
+      end++;
+      while (end < lower.length && /[a-z0-9_-]/.test(lower[end] ?? '')) end++;
+      if (end - (i + prefix.length + 1) >= 8) return true;
+    }
+  }
+  return false;
 }
 function rejectSecretLike(value: unknown, source = '<input>'): void {
   const pending: Array<{ value: unknown; depth: number; path: string }> = [{ value, depth: 0, path: '<document>' }];

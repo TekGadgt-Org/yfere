@@ -105,8 +105,16 @@ describe('catalog loading', () => {
     for (const description of ['foo/bar', 'ordinary/path-like text', 'input/output mapping', 'text/plain']) {
       expect((parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0] as any).description).toBe(description);
     }
-    for (const description of ['owner/private-repository', 'example.test/owner/private-repository']) {
+    for (const description of ['owner/private-repository', 'example.test/owner/private-repository', 'github.com/owner/private-repo', 'gitlab.com/owner/project', 'bitbucket.org/team/repository']) {
       expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).toThrow(/secret-shaped/);
+    }
+  });
+  it('keeps credential controls delimiter-aware without rejecting ordinary prose', () => {
+    for (const description of ['prefix ghp_abcdefgh suffix', 'token=ghp_abcdefgh', 'Authorization: Bearer ***', 'prefix AKIA1234567890ABCDEF suffix']) {
+      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).toThrow(/secret-shaped/);
+    }
+    for (const description of ['graph path', 'sketch of a plan', 'public/path and text/plain']) {
+      expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
     }
   });
   it('uses byte-identical aggregate accounting for escaped direct and loaded documents', () => {
@@ -116,11 +124,19 @@ describe('catalog loading', () => {
     expect(normalizeCatalogDocuments(runtime).snapshotId).toBe(loadCatalogSnapshot(source).snapshotId);
   });
   it('scans allowed slash-bearing values linearly at ordinary and near-limit sizes', () => {
-    for (const size of [1_000, 10_000, 99_000]) {
+    // Warm up the parser/JIT, then compare normalized growth as well as the
+    // generous absolute ceilings. A quadratic scan cannot pass these ratios.
+    parseCatalogDocument(doc('skills', [{ ...skill, description: 'x'.repeat(10_000) + '/safe' }]), 'json');
+    const timings = new Map<number, number>();
+    for (const size of [1_000, 10_000, 100_000]) {
       const started = performance.now();
-      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description: 'x'.repeat(size) + '/safe' }]), 'json')).not.toThrow();
-      expect(performance.now() - started).toBeLessThan(2_000);
+      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description: 'x'.repeat(size - 5) + '/safe' }]), 'json')).not.toThrow();
+      const elapsed = performance.now() - started;
+      timings.set(size, elapsed);
+      expect(elapsed).toBeLessThan(2_000);
     }
+    expect(timings.get(100_000)! / Math.max(timings.get(1_000)!, 0.05)).toBeLessThan(80);
+    expect(timings.get(100_000)! / Math.max(timings.get(10_000)!, 0.05)).toBeLessThan(80);
     const records = Array.from({ length: 80 }, (_, i) => ({ ...skill, id: `large-${i}`, description: 'x'.repeat(98_000) + '/safe' }));
     const started = performance.now();
     expect(normalizeCatalogDocuments([{ kind: 'skills', version: '1.0.0', records }]).skills).toHaveLength(80);
