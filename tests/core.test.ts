@@ -1,16 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { classifyHost, DEFAULT_POLICY, DEFAULT_RETENTION, effectiveConfig, parseConfig } from '../src/config/config.js';
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_POLICY, DEFAULT_RETENTION, effectiveConfig, parseConfig } from '../src/config/config.js';
 import type { HostClassification } from '../src/config/config.js';
 import * as configModule from '../src/config/config.js';
 import { isAllowedInput } from '../src/policy/classification.js';
 import { assertOfflineRoute } from '../src/runtime/network.js';
-
-type HostFixture = { key: string; lane: HostClassification['lane']; nativeExecution: HostClassification['nativeExecution'] };
-function classifyHostFixture(platform: string, arch: string): HostFixture {
-  const key = `${platform}-${arch}`;
-  const lane = key === 'darwin-arm64' || key === 'linux-x64' ? 'full' : key === 'linux-arm64' || key === 'darwin-x64' ? 'smoke' : 'unsupported';
-  return { key, lane, nativeExecution: lane === 'full' ? 'allowed' : 'fail-closed' };
-}
 
 describe('offline configuration', () => {
   it('uses the approved complete defaults', () => {
@@ -43,7 +36,7 @@ describe('offline configuration', () => {
     expect(() => parseConfig('null', 'yaml')).toThrow();
     expect(() => parseConfig('[]', 'json')).toThrow();
   });
-  it('derives host authority from the runtime and exercises every approved tuple', () => {
+  it('derives host authority from the runtime and exercises every approved tuple', async () => {
     const matrix: Array<[string, string, HostClassification['lane'], HostClassification['nativeExecution']]> = [
       ['darwin', 'arm64', 'full', 'allowed'],
       ['linux', 'x64', 'full', 'allowed'],
@@ -52,9 +45,21 @@ describe('offline configuration', () => {
       ['win32', 'x64', 'unsupported', 'fail-closed'],
     ];
     for (const [platform, arch, lane, nativeExecution] of matrix) {
-      expect(classifyHostFixture(platform, arch)).toEqual({ key: `${platform}-${arch}`, lane, nativeExecution });
+      vi.resetModules();
+      vi.doMock('node:os', () => ({
+        arch: () => arch,
+        default: { arch: () => arch, platform: () => platform },
+        platform: () => platform,
+      }));
+      try {
+        const { classifyHost, effectiveConfig: effectiveConfigForHost } = await import('../src/config/config.js');
+        expect(classifyHost()).toEqual({ key: `${platform}-${arch}`, lane, nativeExecution });
+        expect(effectiveConfigForHost({}).host).toEqual({ key: `${platform}-${arch}`, lane, nativeExecution });
+      } finally {
+        vi.doUnmock('node:os');
+        vi.resetModules();
+      }
     }
-    expect(effectiveConfig({}).host).toEqual(classifyHost());
   });
   it('freezes every exported default reference and keeps capture denied', () => {
     expect(Object.isFrozen(DEFAULT_POLICY)).toBe(true);
