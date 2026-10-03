@@ -70,11 +70,11 @@ export const DEFAULT_RETENTION = CANONICAL_DEFAULT_POLICY.retention;
 
 const overrideSchema = z.object({ retention: retentionSchema.partial().optional(), limits: limitsSchema.partial().optional(), sweeps: sweepsSchema.partial().optional() }).strict();
 export const inputSchema = z.object({ overrides: overrideSchema.optional() }).strict();
-const admissionSchema = z.object({ rawCapture: z.object({ authorized: z.literal(true), expiresAt: z.number().int().safe().finite(), maxBytes: rawRun, source: z.literal('trusted-runtime-admission') }).strict() }).strict();
+
 export type Retention = z.infer<typeof retentionSchema>;
 export type EffectivePolicy = z.infer<typeof effectivePolicySchema>;
 export type Input = z.infer<typeof inputSchema>;
-export type RawCaptureAdmission = z.infer<typeof admissionSchema>;
+
 export type HostClassification = { key: string; lane: 'full' | 'smoke' | 'unsupported'; nativeExecution: 'allowed' | 'fail-closed' };
 
 function classifyHostForMatrix(platform: string, arch: string): HostClassification {
@@ -83,8 +83,6 @@ function classifyHostForMatrix(platform: string, arch: string): HostClassificati
   return { key, lane, nativeExecution: lane === 'full' ? 'allowed' : 'fail-closed' };
 }
 
-/** Test-only pure matrix helper; runtime authority must use classifyHost(). */
-export const classifyHostForTest = classifyHostForMatrix;
 export function classifyHost(): HostClassification {
   return classifyHostForMatrix(os.platform(), os.arch());
 }
@@ -95,7 +93,7 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-export function effectiveConfig(input: unknown, trustedAdmission?: unknown): Readonly<Record<string, unknown>> {
+export function effectiveConfig(input: unknown): Readonly<Record<string, unknown>> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new Error('configuration must be a non-null object');
   const parsed = inputSchema.parse(input);
   const o = (parsed.overrides ?? {}) as { retention?: Partial<Retention>; limits?: Partial<z.infer<typeof limitsSchema>>; sweeps?: Partial<z.infer<typeof sweepsSchema>> };
@@ -104,15 +102,13 @@ export function effectiveConfig(input: unknown, trustedAdmission?: unknown): Rea
     limits: { ...CANONICAL_DEFAULT_POLICY.limits, ...(o.limits ?? {}) },
     sweeps: { ...CANONICAL_DEFAULT_POLICY.sweeps, ...(o.sweeps ?? {}) },
   });
-  const admission = trustedAdmission === undefined ? undefined : admissionSchema.parse(trustedAdmission);
   if (policy.retention.rawCaptureEnabled) {
-    if (!admission) throw new Error('raw capture requires trusted runtime admission');
-    if (admission.rawCapture.expiresAt <= Date.now()) throw new Error('raw capture admission expired');
-    if (admission.rawCapture.maxBytes < policy.limits.rawObjectBytes || admission.rawCapture.maxBytes > policy.limits.rawBytesPerRun) throw new Error('raw capture admission byte limit is outside effective policy');
-    if (policy.retention.rawTtl > admission.rawCapture.expiresAt - Date.now()) throw new Error('raw capture admission TTL is outside effective policy');
+    // The trusted runtime issuer is intentionally not part of this offline
+    // bootstrap. Fail closed until that boundary exists.
+    throw new Error('raw capture is unavailable until a trusted runtime issuer exists');
   }
   const host = classifyHost();
-  const authorization = { mode: 'offline-controlled-fixtures-only', inputClassesAllowed: ['synthetic', 'public', 'reviewed-minimized'], rawCapture: policy.retention.rawCaptureEnabled ? { state: 'authorized', source: admission!.rawCapture.source, expiresAt: admission!.rawCapture.expiresAt, maxBytes: admission!.rawCapture.maxBytes } : { state: 'denied', source: 'no-trusted-admission' } };
+  const authorization = { mode: 'offline-controlled-fixtures-only', inputClassesAllowed: ['synthetic', 'public', 'reviewed-minimized'], rawCapture: { state: 'denied', source: 'no-trusted-runtime-issuer' } };
   const network = { liveProviders: 'disabled', providerRoutesConstructed: false, default: 'denied' };
   const authority = { policyVersion: OFFLINE_POLICY_VERSION, defaults: 'approved', overrideSource: Object.keys(o).length ? 'global-config' : 'defaults', host, policy, authorization, network };
   const policyDigest = createHash('sha256').update(JSON.stringify(canonicalize(authority))).digest('hex');

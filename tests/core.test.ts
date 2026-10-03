@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { classifyHost, classifyHostForTest, DEFAULT_POLICY, DEFAULT_RETENTION, effectiveConfig, parseConfig } from '../src/config/config.js';
+import { classifyHost, DEFAULT_POLICY, DEFAULT_RETENTION, effectiveConfig, parseConfig } from '../src/config/config.js';
+import type { HostClassification } from '../src/config/config.js';
+import * as configModule from '../src/config/config.js';
 import { isAllowedInput } from '../src/policy/classification.js';
 import { assertOfflineRoute } from '../src/runtime/network.js';
+
+type HostFixture = { key: string; lane: HostClassification['lane']; nativeExecution: HostClassification['nativeExecution'] };
+function classifyHostFixture(platform: string, arch: string): HostFixture {
+  const key = `${platform}-${arch}`;
+  const lane = key === 'darwin-arm64' || key === 'linux-x64' ? 'full' : key === 'linux-arm64' || key === 'darwin-x64' ? 'smoke' : 'unsupported';
+  return { key, lane, nativeExecution: lane === 'full' ? 'allowed' : 'fail-closed' };
+}
 
 describe('offline configuration', () => {
   it('uses the approved complete defaults', () => {
@@ -21,34 +30,40 @@ describe('offline configuration', () => {
     ];
     for (const retention of invalid) expect(() => effectiveConfig({ overrides: retention })).toThrow();
   });
-  it('requires trusted admission for raw capture and rejects malformed roots', () => {
+  it('denies raw capture without any forgeable admission path', () => {
     expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: false, rawTtl: 3_600_000 } } })).toThrow();
-    expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } })).toThrow('trusted runtime admission');
-    const admission = { rawCapture: { authorized: true as const, expiresAt: Date.now() + 172_800_000, maxBytes: 52_428_800, source: 'trusted-runtime-admission' as const } };
-    const authorized = effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } }, admission);
-    expect((authorized.authorization as any).rawCapture).toMatchObject({ state: 'authorized', source: 'trusted-runtime-admission' });
-    expect(authorized.policy.retention.rawCaptureEnabled).toBe(true);
-    expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } }, { rawCapture: { ...admission.rawCapture, expiresAt: Date.now() - 1 } })).toThrow();
+    expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } })).toThrow('trusted runtime issuer');
+    const lookalike = { rawCapture: { authorized: true, expiresAt: Date.now() + 172_800_000, maxBytes: 52_428_800, source: 'trusted-runtime-admission' } };
+    const publicApi = effectiveConfig as unknown as (input: unknown, admission?: unknown) => unknown;
+    expect(() => publicApi({ overrides: { retention: { rawCaptureEnabled: true } } }, lookalike)).toThrow('trusted runtime issuer');
+    expect(() => publicApi({ overrides: { retention: { rawCaptureEnabled: true } } }, JSON.parse(JSON.stringify(lookalike)))).toThrow('trusted runtime issuer');
+    expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } }, rawCapture: lookalike } as unknown)).toThrow();
     expect(() => effectiveConfig(null)).toThrow();
     expect(() => parseConfig('null', 'json')).toThrow();
     expect(() => parseConfig('null', 'yaml')).toThrow();
     expect(() => parseConfig('[]', 'json')).toThrow();
   });
-  it('derives host authority from the runtime and fails closed outside full hosts', () => {
-    expect(classifyHostForTest('linux', 'x64')).toMatchObject({ lane: 'full', nativeExecution: 'allowed' });
-    expect(classifyHostForTest('linux', 'arm64')).toMatchObject({ lane: 'smoke', nativeExecution: 'fail-closed' });
-    expect(classifyHostForTest('win32', 'x64')).toMatchObject({ lane: 'unsupported', nativeExecution: 'fail-closed' });
+  it('derives host authority from the runtime and exercises every approved tuple', () => {
+    const matrix: Array<[string, string, HostClassification['lane'], HostClassification['nativeExecution']]> = [
+      ['darwin', 'arm64', 'full', 'allowed'],
+      ['linux', 'x64', 'full', 'allowed'],
+      ['linux', 'arm64', 'smoke', 'fail-closed'],
+      ['darwin', 'x64', 'smoke', 'fail-closed'],
+      ['win32', 'x64', 'unsupported', 'fail-closed'],
+    ];
+    for (const [platform, arch, lane, nativeExecution] of matrix) {
+      expect(classifyHostFixture(platform, arch)).toEqual({ key: `${platform}-${arch}`, lane, nativeExecution });
+    }
     expect(effectiveConfig({}).host).toEqual(classifyHost());
   });
-  it('freezes every exported default reference and binds admission to the digest', () => {
+  it('freezes every exported default reference and keeps capture denied', () => {
     expect(Object.isFrozen(DEFAULT_POLICY)).toBe(true);
     expect(Object.isFrozen(DEFAULT_RETENTION)).toBe(true);
     expect(() => ((DEFAULT_RETENTION as any).rawCaptureEnabled = true)).toThrow();
     expect(effectiveConfig({}).policy.retention.rawCaptureEnabled).toBe(false);
-    const admission = { rawCapture: { authorized: true as const, expiresAt: Date.now() + 172_800_000, maxBytes: 52_428_800, source: 'trusted-runtime-admission' as const } };
-    const a = effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } }, admission);
-    const b = effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } }, { rawCapture: { ...admission.rawCapture, maxBytes: 52_428_799 } });
-    expect(a.policyDigest).not.toBe(b.policyDigest);
+    expect((effectiveConfig({}).authorization as { rawCapture: unknown }).rawCapture).toMatchObject({ state: 'denied' });
+    expect('classifyHostForTest' in configModule).toBe(false);
+    expect(() => effectiveConfig({ overrides: { retention: { rawCaptureEnabled: true } } })).toThrow('trusted runtime issuer');
   });
   it('digests all authority and prevents mutation', () => {
     const a = effectiveConfig({});
