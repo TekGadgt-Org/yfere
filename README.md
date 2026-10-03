@@ -44,23 +44,8 @@ For example, application code can load a checked-in source and use the resulting
       }],
     });
     const yamlText = `kind: models
-version: 1.0.0
-records:
-  - id: fixture-model
     version: 1.0.0
-    provider: fixture
-    requestedModel: fixture-model
-    transport: offline-fixture
-    availability: available
-    authorization: authorized
-    modalities: [text]
-    features: []
-    tools: []
-    contextLimit: 1024
-    dataHandling: synthetic-only
-    authorizationScope: offline
-    cost: { input: 0, output: 0 }
-    operationalEvidenceIds: []`;
+    records: []`;
 
     const snapshot = loadCatalogSnapshot([
       { source: 'catalog/skills.json', format: 'json', text: jsonText },
