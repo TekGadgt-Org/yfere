@@ -147,4 +147,22 @@ describe('catalog loading', () => {
     expect(() => canonicalizeCatalog(new Proxy({}, { ownKeys: () => { throw new Error('attacker-controlled ownKeys'); } }) as never)).toThrow(CatalogValidationError);
     expect(() => canonicalizeCatalog(new Proxy({}, { ownKeys: () => { throw new Error('attacker-controlled ownKeys'); } }) as never)).not.toThrow(/attacker-controlled/);
   });
+  it('rejects the complete known-host repository URL grammar without broad slash matching', () => {
+    const rejected = [
+      'https://github.com/owner/repo', 'git://gitlab.com/team/project',
+      'HTTPS://GITHUB.COM/Owner/Repo?tab=readme#top', 'https://bitbucket.org/team/project?ref=main#readme',
+      'https://github.com:443/owner/repo', 'git://gitlab.com:9418/team/project',
+      'https://synthetic-user:synthetic-password@github.com/owner/repo', 'github.com/owner/repo?tab=readme#top',
+      'GiThUb.CoM/Owner/Repo',
+    ];
+    for (const description of rejected) expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).toThrow(CatalogValidationError);
+    const accepted = ['https://example.test/owner/repo', 'documentation at notgithub.com/owner/repo', 'thisgithub.com/owner/repo is prose', 'github.com.evil/owner/repo', 'public/path and MIME text/plain'];
+    for (const description of accepted) expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
+  });
+  it('normalizes post-isolation non-JSON failures without reflecting runtime text', () => {
+    const valid = { schemaVersion: 'catalog-schema-v1', canonicalizationVersion: 'canonical-json-v1', recordVersions: [], documentVersions: [], personas: [], models: [], skills: [], thews: [] };
+    expect(() => canonicalizeCatalog({ ...valid, extra: 1n } as never)).toThrow(new CatalogValidationError('<catalog>', 'invalid catalog input'));
+    expect(() => canonicalizeCatalog({ ...valid, extra: Symbol('attacker-runtime') } as never)).toThrow(CatalogValidationError);
+    expect(() => canonicalizeCatalog({ ...valid, extra: 1n } as never)).not.toThrow(/BigInt|attacker-runtime/);
+  });
 });

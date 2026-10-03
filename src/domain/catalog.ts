@@ -97,7 +97,11 @@ export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'
   let isolated: Omit<CatalogSnapshot, 'snapshotId'>;
   try { isolated = clone(snapshot); }
   catch { throw new CatalogValidationError('<catalog>', 'invalid catalog input'); }
-  return canonicalCatalogIdentity(isolated);
+  try { return canonicalCatalogIdentity(isolated); }
+  catch (error) {
+    if (error instanceof CatalogValidationError) throw error;
+    throw new CatalogValidationError('<catalog>', 'invalid catalog input');
+  }
 }
 function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
@@ -175,24 +179,47 @@ function hasKnownRepository(value: string): boolean {
     let at = lower.indexOf(host);
     while (at >= 0) {
       const before = at === 0 ? '' : lower[at - 1];
-      if (!before || /[\s"'(=:]/.test(before)) {
-        let cursor = at + host.length;
-        if (lower[cursor] === '/') {
-          cursor++;
-          const ownerStart = cursor;
-          while (cursor < lower.length && !/[\/\\\s"')]/.test(lower[cursor] ?? '')) cursor++;
-          if (cursor > ownerStart && lower[cursor] === '/') {
-            cursor++;
-            const repoStart = cursor;
-            while (cursor < lower.length && !/[\/\\\s"')]/.test(lower[cursor] ?? '')) cursor++;
-            if (cursor > repoStart) return true;
-          }
+      let authority = false;
+      if (at >= 3 && lower.slice(at - 3, at) === '://') {
+        let schemeStart = at - 4;
+        while (schemeStart >= 0 && /[a-z0-9+.-]/.test(lower[schemeStart] ?? '')) schemeStart--;
+        const scheme = lower.slice(schemeStart + 1, at - 3);
+        authority = scheme === 'http' || scheme === 'https' || scheme === 'git' || scheme === 'ssh';
+        if (authority) {
+          const delimiter = at - 3;
+          const authorityText = lower.slice(delimiter + 3, at);
+          authority = !/[/?#\s\\]/.test(authorityText);
         }
+      } else {
+        authority = !before || /[\s"'(=:]/.test(before);
       }
+      if (authority && hasRepositoryPath(lower, at + host.length)) return true;
       at = lower.indexOf(host, at + host.length);
     }
   }
   return false;
+}
+function hasRepositoryPath(value: string, start: number): boolean {
+  let cursor = start;
+  if (value[cursor] === ':') {
+    cursor++;
+    const portStart = cursor;
+    while (cursor < value.length && isDigit(value.charCodeAt(cursor))) cursor++;
+    if (cursor === portStart) return false;
+  }
+  if (value[cursor] !== '/') return false;
+  cursor++;
+  const ownerStart = cursor;
+  while (cursor < value.length && !isPathDelimiter(value[cursor] ?? '')) cursor++;
+  if (cursor === ownerStart || value[cursor] !== '/') return false;
+  cursor++;
+  const repoStart = cursor;
+  while (cursor < value.length && !isPathDelimiter(value[cursor] ?? '')) cursor++;
+  return cursor > repoStart;
+}
+function isDigit(code: number): boolean { return code >= 48 && code <= 57; }
+function isPathDelimiter(value: string): boolean {
+  return value === '/' || value === '\\' || value === '?' || value === '#' || value === ' ' || value === '\t' || value === '\n' || value === '"' || value === "'" || value === ')';
 }
 function hasDelimitedCredential(value: string): boolean {
   const lower = value.toLowerCase();
