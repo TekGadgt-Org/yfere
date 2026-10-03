@@ -182,10 +182,9 @@ describe('catalog loading', () => {
     for (const description of accepted) expect(parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json').records[0]).toMatchObject({ description });
   });
   it('keeps direct-userinfo lookalike scanning monotonic for every known host', () => {
-    const hosts = ['github.comX', 'gitlab.comX', 'bitbucket.orgX'];
+    const hosts = ['github.com', 'gitlab.com', 'bitbucket.org'];
     const sizes = [1_000, 10_000, 100_000];
-    const timings = new Map<string, number[]>();
-    for (const host of hosts) {
+    for (const host of hosts.map((value) => `${value}X`)) {
       const values = sizes.map((size) => `a@${host}`.repeat(Math.ceil(size / (host.length + 2))).slice(0, size));
       parseCatalogDocument(doc('skills', [{ ...skill, description: values[1] }]), 'json');
       const samples = values.map((description) => {
@@ -193,16 +192,53 @@ describe('catalog loading', () => {
         expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).not.toThrow();
         return performance.now() - started;
       });
-      timings.set(host, samples);
       expect(samples[2]).toBeLessThan(2_000);
       expect(samples[2] / Math.max(samples[0], 0.05)).toBeLessThan(80);
       expect(samples[2] / Math.max(samples[1], 0.05)).toBeLessThan(30);
     }
-    for (const nearMiss of ['a@github.comX:443', 'a@github.comX/owner', 'a@github.comX:abc/owner/repo', 'a@github.comX/owner/repo']) {
-      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description: nearMiss }]), 'json')).not.toThrow();
+    const timings = new Map<string, Map<string, number[]>>();
+    for (const host of hosts) {
+      const families = {
+        invalidPort: `a@${host}X:abc/owner/repo`,
+        incompletePath: `a@${host}X/owner`,
+        knownHostSuffix: `a@${host}X/owner/repo`,
+      };
+      const familyTimings = new Map<string, number[]>();
+      for (const [family, seed] of Object.entries(families)) {
+        const values = sizes.map((size) => seed.repeat(Math.ceil(size / seed.length)).slice(0, size));
+        parseCatalogDocument(doc('skills', [{ ...skill, description: values[1] }]), 'json');
+        const samples = values.map((description) => {
+          const started = performance.now();
+          expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description }]), 'json')).not.toThrow();
+          return performance.now() - started;
+        });
+        familyTimings.set(family, samples);
+        expect(samples[2]).toBeLessThan(2_000);
+        expect(samples[2] / Math.max(samples[0], 0.05)).toBeLessThan(80);
+        expect(samples[2] / Math.max(samples[1], 0.05)).toBeLessThan(30);
+      }
+      timings.set(host, familyTimings);
     }
-    expect(timings.size).toBe(3);
+    expect(timings.size).toBe(hosts.length);
   }, 20_000);
+
+  it('rejects direct credentials after lexical delimiters for every known host', () => {
+    const hosts = ['github.com', 'gitlab.com', 'bitbucket.org'];
+    const delimiters = ['/', '?', '#', '\\', ')'];
+    for (const host of hosts) {
+      for (const delimiter of delimiters) {
+        const rejected = `prefix${delimiter}synthetic-user:synthetic-password@${host}:443/owner/repo`;
+        expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description: rejected }]), 'json')).toThrow(CatalogValidationError);
+      }
+    }
+    for (const value of [
+      'prefix/ordinary text', 'prefix?ordinary text', 'prefix#ordinary text',
+      'prefix\\ordinary text', 'prefix)ordinary text',
+      'documentation synthetic-user:synthetic-password@example.test:443/owner/repo',
+    ]) {
+      expect(parseCatalogDocument(doc('skills', [{ ...skill, description: value }]), 'json').records[0]).toMatchObject({ description: value });
+    }
+  });
 
   it('normalizes post-isolation non-JSON failures without reflecting runtime text', () => {
     const valid = { schemaVersion: 'catalog-schema-v1', canonicalizationVersion: 'canonical-json-v1', recordVersions: [], documentVersions: [], personas: [], models: [], skills: [], thews: [] };

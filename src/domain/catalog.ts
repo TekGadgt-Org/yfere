@@ -179,11 +179,16 @@ function hasKnownRepository(value: string): boolean {
   let tokenValid = true;
   let urlAuthority = false;
   let urlScheme = '';
-  const isTokenBoundary = (c: string): boolean => /[\s"'(=]/.test(c);
+  // Lexical separators end a bounded token as well as invalidating the
+  // preceding userinfo candidate. Keep this token state independent from the
+  // URL-authority state below: a new token may contain a direct userinfo
+  // candidate even when the preceding token was path-like or malformed.
+  const isTokenBoundary = (c: string): boolean => /[\s"'(=\/?#\\)]/.test(c);
   const isInvalidUserinfo = (c: string): boolean => /[\\/?#\s"')]/.test(c);
   for (let i = 0; i < lower.length; i++) {
     const c = lower[i]!;
-    if (isTokenBoundary(c)) {
+    const isSchemeDelimiter = c === '/' && (lower[i - 1] === ':' || (lower[i - 1] === '/' && lower[i - 2] === ':'));
+    if (isTokenBoundary(c) && !isSchemeDelimiter) {
       tokenStart = i + 1;
       tokenValid = true;
     } else if (isInvalidUserinfo(c)) {
