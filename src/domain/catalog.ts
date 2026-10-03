@@ -175,39 +175,36 @@ function sensitiveValue(value: string): boolean {
 }
 function hasKnownRepository(value: string): boolean {
   const lower = value.toLowerCase();
-  for (const host of ['github.com', 'gitlab.com', 'bitbucket.org']) {
-    let at = lower.indexOf(host);
-    while (at >= 0) {
-      const before = at === 0 ? '' : lower[at - 1];
-      let authority = false;
-      if (at >= 3 && lower.slice(at - 3, at) === '://') {
-        let schemeStart = at - 4;
-        while (schemeStart >= 0 && /[a-z0-9+.-]/.test(lower[schemeStart] ?? '')) schemeStart--;
-        const scheme = lower.slice(schemeStart + 1, at - 3);
-        authority = scheme === 'http' || scheme === 'https' || scheme === 'git' || scheme === 'ssh';
-        if (authority) {
-          const delimiter = at - 3;
-          const authorityText = lower.slice(delimiter + 3, at);
-          authority = !/[/?#\s\\]/.test(authorityText);
-        }
-      } else {
-        authority = !before || /[\s"'(=:]/.test(before) || (before === '@' && hasDirectUserinfo(lower, at));
-      }
-      if (authority && hasRepositoryPath(lower, at + host.length)) return true;
-      at = lower.indexOf(host, at + host.length);
+  let tokenStart = 0;
+  let tokenValid = true;
+  let urlAuthority = false;
+  let urlScheme = '';
+  const isTokenBoundary = (c: string): boolean => /[\s"'(=]/.test(c);
+  const isInvalidUserinfo = (c: string): boolean => /[\\/?#\s"')]/.test(c);
+  for (let i = 0; i < lower.length; i++) {
+    const c = lower[i]!;
+    if (isTokenBoundary(c)) {
+      tokenStart = i + 1;
+      tokenValid = true;
+    } else if (isInvalidUserinfo(c)) {
+      tokenValid = false;
+    }
+    if (i >= 2 && lower.slice(i - 2, i + 1) === '://') {
+      urlScheme = lower.slice(tokenStart, i - 2);
+      urlAuthority = urlScheme === 'http' || urlScheme === 'https' || urlScheme === 'git' || urlScheme === 'ssh';
+    } else if (urlAuthority && /[/?#\s\\]/.test(c)) {
+      urlAuthority = false;
+    }
+    for (const host of ['github.com', 'gitlab.com', 'bitbucket.org']) {
+      if (!lower.startsWith(host, i)) continue;
+      const at = i - 1;
+      const before = i === 0 ? '' : lower[i - 1];
+      const directUserinfo = before === '@' && tokenValid && tokenStart < at;
+      const authority = (urlAuthority && Boolean(urlScheme)) || (!urlAuthority && (!before || /[\s"'(=:]/.test(before) || directUserinfo));
+      if (authority && hasRepositoryPath(lower, i + host.length)) return true;
     }
   }
   return false;
-}
-function hasDirectUserinfo(value: string, hostStart: number): boolean {
-  // Only treat @ as direct userinfo when it has a bounded token before it;
-  // the repository-path check still gates the known-host classification.
-  const at = hostStart - 1;
-  if (at < 1 || value[at] !== '@') return false;
-  let start = at - 1;
-  while (start >= 0 && !/[\s"'(=]/.test(value[start] ?? '')) start--;
-  const userinfo = value.slice(start + 1, at);
-  return userinfo.length > 0 && !/[\\/?#\s"')]/.test(userinfo);
 }
 function hasRepositoryPath(value: string, start: number): boolean {
   let cursor = start;
