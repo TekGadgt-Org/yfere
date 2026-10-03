@@ -16,6 +16,21 @@ describe('catalog loading', () => {
     expect(Object.isFrozen(a.personas[0])).toBe(true);
     expect(() => ((a.personas[0] as any).id = 'changed')).toThrow();
   });
+  it('is deterministic across record order and does not depend on localeCompare', () => {
+    const first = { ...skill, id: 'alpha-skill', requiredCapabilities: ['z-capability', 'a-capability'], artifactFormats: ['z-format', 'a-format'] };
+    const second = { ...skill, id: 'beta-skill', prerequisites: ['alpha-skill'] };
+    const a = loadCatalogSnapshot([{ format: 'json', text: doc('skills', [first, second]) }]);
+    const b = loadCatalogSnapshot([{ format: 'json', text: doc('skills', [second, first]) }]);
+    expect(a.snapshotId).toBe(b.snapshotId);
+    expect(canonicalizeCatalog(a)).toBe(canonicalizeCatalog(b));
+    const original = String.prototype.localeCompare;
+    String.prototype.localeCompare = () => { throw new Error('localeCompare must not define catalog identity'); };
+    try {
+      expect(loadCatalogSnapshot([{ format: 'json', text: doc('skills', [second, first]) }]).snapshotId).toBe(a.snapshotId);
+    } finally {
+      String.prototype.localeCompare = original;
+    }
+  });
   it('preserves auto, empty and non-empty skill overrides', () => {
     expect((parseCatalogDocument(doc('personas', [{ ...persona, skillsOverride: 'auto' }]), 'json')).records[0] as any).toMatchObject({ skillsOverride: 'auto' });
     expect((parseCatalogDocument(doc('personas', [{ ...persona, skillsOverride: ['lint'] }]), 'json')).records[0] as any).toMatchObject({ skillsOverride: ['lint'] });
@@ -47,5 +62,19 @@ describe('catalog loading', () => {
     const { snapshotId, ...payload } = snapshot;
     expect(snapshot.recordVersions).toEqual(['1.0.0']);
     expect(snapshotId).toBe(createHash('sha256').update(canonicalizeCatalog(payload)).digest('hex'));
+  });
+  it('deep-freezes nested authority values and keeps source-aware redaction', () => {
+    const source = { ...skill, positiveExamples: ['nested'] };
+    const snapshot = loadCatalogSnapshot([{ format: 'json', text: doc('skills', [source]) }]);
+    source.positiveExamples[0] = 'mutated';
+    expect(snapshot.skills[0].positiveExamples[0]).toBe('nested');
+    expect(Object.isFrozen(snapshot.skills[0].positiveExamples)).toBe(true);
+    expect(() => ((snapshot.skills[0].positiveExamples as string[])[0] = 'blocked')).toThrow();
+    const modelSnapshot = loadCatalogSnapshot([{ format: 'json', text: doc('models', [model]) }]);
+    expect(Object.isFrozen(modelSnapshot.models[0].cost)).toBe(true);
+    expect(() => ((modelSnapshot.models[0].cost as { output: number }).output = 99)).toThrow();
+    const secret = JSON.stringify({ kind: 'skills', version: '1.0.0', records: [{ ...skill, apiKey: 'sk_live_123456789012' }] });
+    expect(() => parseCatalogDocument(secret, 'json', 'secrets.json')).toThrow(/secrets\.json/);
+    expect(() => parseCatalogDocument(secret, 'json', 'secrets.json')).not.toThrow(/sk_live/);
   });
 });

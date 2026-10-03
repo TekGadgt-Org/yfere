@@ -79,9 +79,9 @@ function canonical(value: unknown): string {
   if (value !== null && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => codeUnitCompare(a, b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value);
 }
-export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonical(snapshot); }
-
 function codeUnitCompare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
+function canonicalCatalogIdentity(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonical(snapshot); }
+export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonicalCatalogIdentity(snapshot); }
 function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
   const clean = text.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
@@ -118,7 +118,7 @@ function rejectSecretLike(value: unknown, source = '<input>'): void {
   const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   const seen = new WeakSet<object>(); let nodes = 0;
   while (pending.length) {
-    const current = pending.pop()!; if (++nodes > MAX_SCAN_NODES || current.depth > MAX_SCAN_DEPTH) issue('<document>', 'catalog document exceeds safety limits');
+    const current = pending.pop()!; if (++nodes > MAX_SCAN_NODES || current.depth > MAX_SCAN_DEPTH) issue(`${source}.<document>`, 'catalog document exceeds safety limits');
     if (typeof current.value === 'string') { if (secretValue.test(current.value) || privateValue.test(current.value)) issue(`${source}.<document>`, 'secret-shaped value is not permitted'); continue; }
     if (!current.value || typeof current.value !== 'object') continue;
     if (seen.has(current.value)) continue; seen.add(current.value);
@@ -159,8 +159,8 @@ export function normalizeCatalogDocuments(documents: readonly unknown[]): Catalo
   for (const input of documents) { rejectSecretLike(input); const parsed = catalogDocumentSchema.safeParse(input); if (!parsed.success) issue('<document>', 'invalid catalog document'); const document = parsed.data; versions.add(document.version); grouped[document.kind].push(...clone(document.records) as never[]); }
   for (const records of Object.values(grouped)) records.sort((a, b) => codeUnitCompare(a.id, b.id));
   checkRefs(grouped);
-  const base = { schemaVersion: CATALOG_SCHEMA_VERSION, canonicalizationVersion: CANONICALIZATION_VERSION, recordVersions: [...versions].sort(), personas: grouped.personas, models: grouped.models, skills: grouped.skills, thews: grouped.thews } as Omit<CatalogSnapshot, 'snapshotId'>;
-  const snapshotId = createHash('sha256').update(canonical(base)).digest('hex');
+  const base = { schemaVersion: CATALOG_SCHEMA_VERSION, canonicalizationVersion: CANONICALIZATION_VERSION, recordVersions: [...versions].sort(codeUnitCompare), personas: grouped.personas, models: grouped.models, skills: grouped.skills, thews: grouped.thews } as Omit<CatalogSnapshot, 'snapshotId'>;
+  const snapshotId = createHash('sha256').update(canonicalCatalogIdentity(base)).digest('hex');
   return freeze({ ...base, snapshotId });
 }
 
