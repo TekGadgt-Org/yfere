@@ -1,0 +1,391 @@
+import { createHash } from 'node:crypto';
+import { parse as parseYaml } from 'yaml';
+import { z } from 'zod';
+
+export const CATALOG_SCHEMA_VERSION = 'catalog-schema-v1' as const;
+export const CANONICALIZATION_VERSION = 'canonical-json-v1' as const;
+
+const id = z.string().regex(/^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/, 'invalid catalog identifier').max(128);
+const version = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/, 'invalid version').max(64);
+const text = z.string().min(1).max(100_000);
+const finite = z.number().finite();
+const unknownOrNumber = z.union([finite, z.literal('unknown')]);
+const refList = z.array(id).max(128);
+const provenance = z.enum(['synthetic', 'documented_example', 'recorded_live']);
+const availability = z.enum(['available', 'unavailable', 'unknown']);
+const authorization = z.enum(['authorized', 'unauthorized', 'unknown']);
+const trust = z.enum(['reviewed', 'unreviewed', 'blocked']);
+
+export const personaDefinitionSchema = z.object({
+  id, version, role: text, positiveExamples: z.array(text).max(128), negativeExamples: z.array(text).max(128),
+  requiredCapabilities: refList, outputContract: text, requiredSkillIds: refList, defaultSkillIds: refList, eligibleSkillIds: refList,
+  modelOverride: id.optional(), skillsOverride: z.union([z.literal('auto'), refList]).optional(),
+  workspacePolicy: z.enum(['isolated', 'reviewed']), artifactOwnership: z.enum(['persona', 'project']), reviewIndependence: z.boolean(),
+}).strict();
+
+export const modelEndpointSchema = z.object({
+  id, version, provider: z.enum(['codex', 'claude-code', 'opencode-go', 'fixture']), requestedModel: id, exactModel: id.optional(),
+  transport: z.enum(['offline-fixture', 'direct-api', 'native-runtime']), availability, authorization,
+  modalities: z.array(z.enum(['text', 'image', 'audio'])).max(8), features: refList, tools: refList, contextLimit: z.number().int().positive().safe(),
+  dataHandling: z.enum(['synthetic-only', 'public-only', 'reviewed-minimized']), authorizationScope: z.enum(['offline', 'controlled-local', 'live']),
+  cost: z.object({ input: unknownOrNumber, output: unknownOrNumber }).strict(), operationalEvidenceIds: refList,
+}).strict();
+
+export const skillDefinitionSchema = z.object({
+  id, version, contentHash: z.string().regex(/^[a-f0-9]{64}$/, 'invalid content hash'), trust, description: text,
+  positiveExamples: z.array(text).max(128), negativeExamples: z.array(text).max(128), requiredCapabilities: refList, requiredTools: refList,
+  prerequisites: refList, sideEffectClass: z.enum(['none', 'workspace', 'external']), conflicts: refList,
+  instructionTokenEstimate: z.number().int().nonnegative().safe(), artifactFormats: z.array(id).max(32),
+}).strict();
+
+const subject = z.object({ endpointId: id.optional(), personaId: id.optional(), skillId: id.optional(), taskFamily: id.optional() }).strict().refine(v => Object.keys(v).length > 0, 'evidence subject is required');
+const interval = z.object({ low: finite, high: finite }).strict().superRefine((v, c) => { if (v.low > v.high) c.addIssue({ code: 'custom', path: ['low'], message: 'must not exceed high' }); });
+export const thewEvidenceSchema = z.object({
+  id, version, subject, metric: id, rubricVersion: version, value: unknownOrNumber, sampleCount: z.union([z.number().int().nonnegative().safe(), z.literal('unknown')]),
+  uncertainty: z.union([interval, z.literal('unknown')]), provenance, measuredAt: z.string().datetime({ offset: true }), validUntil: z.string().datetime({ offset: true }).optional(),
+  applicability: z.enum(['exact', 'related', 'unknown']), status: z.enum(['accepted', 'superseded', 'rejected']),
+}).strict();
+
+const documentKinds = ['personas', 'models', 'skills', 'thews'] as const;
+export type DocumentKind = typeof documentKinds[number];
+const recordSchemas = { personas: personaDefinitionSchema, models: modelEndpointSchema, skills: skillDefinitionSchema, thews: thewEvidenceSchema } as const;
+export const catalogDocumentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('personas'), version, records: z.array(personaDefinitionSchema).max(10_000) }).strict(),
+  z.object({ kind: z.literal('models'), version, records: z.array(modelEndpointSchema).max(10_000) }).strict(),
+  z.object({ kind: z.literal('skills'), version, records: z.array(skillDefinitionSchema).max(10_000) }).strict(),
+  z.object({ kind: z.literal('thews'), version, records: z.array(thewEvidenceSchema).max(10_000) }).strict(),
+]);
+
+export type PersonaDefinition = Readonly<z.infer<typeof personaDefinitionSchema>>;
+export type ModelEndpoint = Readonly<z.infer<typeof modelEndpointSchema>>;
+export type SkillDefinition = Readonly<z.infer<typeof skillDefinitionSchema>>;
+export type ThewEvidence = Readonly<z.infer<typeof thewEvidenceSchema>>;
+export type CatalogDocument = z.infer<typeof catalogDocumentSchema>;
+export type CatalogSnapshot = Readonly<{
+  schemaVersion: typeof CATALOG_SCHEMA_VERSION; canonicalizationVersion: typeof CANONICALIZATION_VERSION; snapshotId: string;
+  recordVersions: readonly string[];
+  documentVersions: readonly Readonly<{ kind: DocumentKind; version: string }>[];
+  personas: readonly PersonaDefinition[]; models: readonly ModelEndpoint[]; skills: readonly SkillDefinition[]; thews: readonly ThewEvidence[];
+}>;
+
+export class CatalogValidationError extends Error {
+  readonly code = 'CATALOG_INVALID' as const;
+  constructor(readonly path: string, message: string) { super(`${path}: ${message}`); this.name = 'CatalogValidationError'; }
+}
+function boundary<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) { if (error instanceof CatalogValidationError) throw error; issue('<catalog>', 'invalid catalog input'); }
+}
+function canonicalBoundary(operation: () => string): string {
+  try { return operation(); }
+  catch { throw new CatalogValidationError('<catalog>', 'invalid catalog input'); }
+}
+
+function freeze<T>(value: T): T { if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.freeze(value); for (const child of Object.values(value as Record<string, unknown>)) freeze(child); } return value; }
+function clone<T>(value: T): T { if (typeof structuredClone === 'function') return structuredClone(value); return JSON.parse(JSON.stringify(value)) as T; }
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => codeUnitCompare(a, b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+function codeUnitCompare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
+function canonicalCatalogIdentity(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonical(snapshot); }
+export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string {
+  // First isolate caller-controlled accessors/proxies.  Only the second stage
+  // operates on ordinary data, so a validation error raised by trusted
+  // canonicalization is not confused with an attacker-controlled throw.
+  let isolated: Omit<CatalogSnapshot, 'snapshotId'>;
+  try { isolated = clone(snapshot); }
+  catch { throw new CatalogValidationError('<catalog>', 'invalid catalog input'); }
+  try { return canonicalCatalogIdentity(isolated); }
+  catch (error) {
+    if (error instanceof CatalogValidationError) throw error;
+    throw new CatalogValidationError('<catalog>', 'invalid catalog input');
+  }
+}
+function safeToken(value: unknown, fallback: string): string {
+  const text = typeof value === 'string' ? value : '';
+  // Source labels are diagnostic metadata, not trusted content. Never preserve
+  // a label which itself resembles a credential or a local/repository path.
+  if (!text || text.length > 128 || sensitiveValue(text)) return fallback;
+  const clean = text.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clean) ? clean : fallback;
+}
+function safePath(path: string): string { return path.split('.').map(part => part.replace(/[^A-Za-z0-9_[\]-]/g, '_').slice(0, 96) || '<field>').join('.'); }
+function issue(path: string, message: string): never { throw new CatalogValidationError(safePath(path), message); }
+function rejectDuplicateJsonKeys(input: string, source: string): void {
+  const stack: Array<{ type: 'object'; keys: Set<string>; expectingKey: boolean } | { type: 'array' }> = [];
+  let i = 0;
+  const skip = () => { while (/\s/.test(input[i] ?? '')) i++; };
+  const stringToken = (): string => {
+    const start = i++; let escaped = false;
+    while (i < input.length) { const c = input[i++]; if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') return JSON.parse(input.slice(start, i)) as string; }
+    issue(source, 'malformed catalog document');
+  };
+  while (i < input.length) {
+    skip(); const c = input[i];
+    if (c === '"') { const token = stringToken(); const frame = stack[stack.length - 1]; if (frame?.type === 'object' && frame.expectingKey) { if (frame.keys.has(token)) issue(source, 'duplicate object key'); frame.keys.add(token); frame.expectingKey = false; } continue; }
+    if (c === '{') { stack.push({ type: 'object', keys: new Set(), expectingKey: true }); i++; continue; }
+    if (c === '[') { stack.push({ type: 'array' }); i++; continue; }
+    if (c === '}') { stack.pop(); i++; continue; }
+    if (c === ']') { stack.pop(); i++; continue; }
+    if (c === ':' || c === ',') { const frame = stack[stack.length - 1]; if (c === ',' && frame?.type === 'object') frame.expectingKey = true; i++; continue; }
+    i++;
+  }
+}
+const MAX_DOCUMENT_BYTES = 2_000_000;
+const MAX_DOCUMENTS = 256;
+const MAX_RECORDS = 50_000;
+const MAX_CATALOG_BYTES = 8_000_000;
+const MAX_SCAN_NODES = 100_000;
+const MAX_SCAN_DEPTH = 128;
+function hasUrlUserinfo(value: string): boolean {
+  const marker = value.indexOf('://');
+  if (marker <= 0 || marker > 32) return false;
+  for (let i = 0; i < marker; i++) {
+    const c = value.charCodeAt(i);
+    if (!((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (i > 0 && ((c >= 48 && c <= 57) || c === 43 || c === 45 || c === 46)))) return false;
+  }
+  let end = value.length;
+  for (const delimiter of ['/', '?', '#', ' ', '\t', '\n']) { const at = value.indexOf(delimiter, marker + 3); if (at >= 0 && at < end) end = at; }
+  return value.slice(marker + 3, end).includes('@');
+}
+function pathSegments(value: string): string[] {
+  const segments: string[] = []; let start = 0;
+  for (let i = 0; i <= value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (i === value.length || c === 47 || c === 92 || c === 32 || c === 34 || c === 39 || c === 41) {
+      if (i > start) segments.push(value.slice(start, i).toLowerCase());
+      start = i + 1;
+    }
+  }
+  return segments;
+}
+function sensitiveValue(value: string): boolean {
+  const lower = value.toLowerCase(); const trimmed = lower.trim();
+  if (trimmed === 'bearer' || trimmed.startsWith('bearer ') || trimmed.startsWith('authorization: bearer')) return true;
+  if (hasUrlUserinfo(value) || lower.startsWith('git@') || lower.startsWith('ssh://') || lower.startsWith('file://')) return true;
+  if (lower.includes('-----begin ') && lower.includes(' private key-----')) return true;
+  if (hasKnownRepository(value) || hasDelimitedCredential(value)) return true;
+  if (/^akia[0-9a-z]{16}/i.test(trimmed)) return true;
+  if (lower.startsWith('~/') || lower.startsWith('./') || lower.startsWith('../') || /^[a-z]:\\users(?:\\|$)/i.test(value)) return true;
+  const segments = pathSegments(value); const roots = new Set(['opt', 'var', 'home', 'users', 'root', 'tmp', 'private', 'workspace', '.git', '.ssh', '.env']);
+  if (segments.some(segment => roots.has(segment))) return true;
+  return segments.length >= 2 && segments.some(segment => segment === 'private' || segment.includes('repository'));
+}
+function hasKnownRepository(value: string): boolean {
+  const lower = value.toLowerCase();
+  let tokenStart = 0;
+  let tokenValid = true;
+  let urlAuthority = false;
+  let urlScheme = '';
+  // Lexical separators end a bounded token as well as invalidating the
+  // preceding userinfo candidate. Keep this token state independent from the
+  // URL-authority state below: a new token may contain a direct userinfo
+  // candidate even when the preceding token was path-like or malformed.
+  const isTokenBoundary = (c: string): boolean => /[\s"'(=\/?#\\)]/.test(c);
+  const isInvalidUserinfo = (c: string): boolean => /[\\/?#\s"')]/.test(c);
+  // Authority ends at URL syntax separators, whitespace, a backslash, or the
+  // closing parenthesis that terminates a surrounding prose expression.
+  const isUrlAuthorityBoundary = (c: string): boolean => /[/?#\s\\)]/.test(c);
+  for (let i = 0; i < lower.length; i++) {
+    const c = lower[i]!;
+    const isSchemeDelimiter = c === '/' && (lower[i - 1] === ':' || (lower[i - 1] === '/' && lower[i - 2] === ':'));
+    if (isTokenBoundary(c) && !isSchemeDelimiter) {
+      tokenStart = i + 1;
+      tokenValid = true;
+    } else if (isInvalidUserinfo(c)) {
+      tokenValid = false;
+    }
+    if (i >= 2 && lower.slice(i - 2, i + 1) === '://') {
+      urlScheme = lower.slice(tokenStart, i - 2);
+      urlAuthority = urlScheme === 'http' || urlScheme === 'https' || urlScheme === 'git' || urlScheme === 'ssh';
+    } else if (urlAuthority && isUrlAuthorityBoundary(c)) {
+      urlAuthority = false;
+    }
+    for (const host of ['github.com', 'gitlab.com', 'bitbucket.org']) {
+      if (!lower.startsWith(host, i)) continue;
+      const at = i - 1;
+      const before = i === 0 ? '' : lower[i - 1];
+      const directUserinfo = before === '@' && tokenValid && tokenStart < at;
+      const authority = (urlAuthority && Boolean(urlScheme)) || (!urlAuthority && (!before || /[\s"'(=:]/.test(before) || directUserinfo));
+      if (authority && hasRepositoryPath(lower, i + host.length)) return true;
+    }
+  }
+  return false;
+}
+function hasRepositoryPath(value: string, start: number): boolean {
+  let cursor = start;
+  if (value[cursor] === ':') {
+    cursor++;
+    const portStart = cursor;
+    while (cursor < value.length && isDigit(value.charCodeAt(cursor))) cursor++;
+    if (cursor === portStart) return false;
+  }
+  if (value[cursor] !== '/') return false;
+  cursor++;
+  const ownerStart = cursor;
+  while (cursor < value.length && !isPathDelimiter(value[cursor] ?? '')) cursor++;
+  if (cursor === ownerStart || value[cursor] !== '/') return false;
+  cursor++;
+  const repoStart = cursor;
+  while (cursor < value.length && !isPathDelimiter(value[cursor] ?? '')) cursor++;
+  return cursor > repoStart;
+}
+function isDigit(code: number): boolean { return code >= 48 && code <= 57; }
+function isPathDelimiter(value: string): boolean {
+  return value === '/' || value === '\\' || value === '?' || value === '#' || value === ' ' || value === '\t' || value === '\n' || value === '"' || value === "'" || value === ')';
+}
+function hasDelimitedCredential(value: string): boolean {
+  const lower = value.toLowerCase();
+  const prefixes = ['ghp', 'github_pat', 'xoxb', 'xoxa', 'xoxp', 'xoxr', 'xoxs', 'aiza', 'sk', 'pk'];
+  for (let i = 0; i < lower.length; i++) {
+    if (i > 0 && !/[=:_\s"'(]/.test(lower[i - 1] ?? '')) continue;
+    if (lower.startsWith('akia', i) && /^[a-z0-9]{16}/.test(lower.slice(i + 4))) return true;
+    for (const prefix of prefixes) {
+      if (!lower.startsWith(prefix, i)) continue;
+      let end = i + prefix.length;
+      if ((prefix === 'sk' || prefix === 'pk') && !['-', '_'].includes(lower[end] ?? '')) continue;
+      if (prefix !== 'sk' && prefix !== 'pk' && !['-', '_'].includes(lower[end] ?? '')) continue;
+      end++;
+      while (end < lower.length && /[a-z0-9_-]/.test(lower[end] ?? '')) end++;
+      if (end - (i + prefix.length + 1) >= 8) return true;
+    }
+  }
+  return false;
+}
+function rejectSecretLike(value: unknown, source = '<input>'): void {
+  const pending: Array<{ value: unknown; depth: number; path: string }> = [{ value, depth: 0, path: '<document>' }];
+  const seen = new WeakSet<object>(); let nodes = 0;
+  while (pending.length) {
+    const current = pending.pop()!; if (++nodes > MAX_SCAN_NODES || current.depth > MAX_SCAN_DEPTH) issue(`${source}.<document>`, 'catalog document exceeds safety limits');
+    if (typeof current.value === 'string') {
+      const valueText = current.value;
+      const obviousCredential = sensitiveValue(valueText);
+      if (obviousCredential || valueText.length <= 1024 || valueText.includes('/') || valueText.includes('\\') || valueText.includes('@') || valueText.includes(':')) {
+        if (sensitiveValue(valueText)) issue(`${source}.${current.path}`, 'secret-shaped value is not permitted');
+      }
+      continue;
+    }
+    if (!current.value || typeof current.value !== 'object') continue;
+    if (seen.has(current.value)) continue; seen.add(current.value);
+    for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
+      const field = Array.isArray(current.value) ? `[${key}]` : key.replace(/[^A-Za-z0-9_-]/g, '_');
+      if (/^(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)$/i.test(key) || /(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)(?:[-_]|$)/i.test(key)) issue(`${source}.${current.path}.<field>`, 'secret-shaped field is not permitted');
+      pending.push({ value: child, depth: current.depth + 1, path: Array.isArray(current.value) ? `${current.path}[${key}]` : `${current.path}.${field}` });
+    }
+  }
+}
+function measureCatalogBytes(value: unknown): number {
+  // This is the single aggregate policy representation. Parsed source documents
+  // and direct runtime documents both become the same canonical JSON bytes.
+  try { return new TextEncoder().encode(canonical(value)).byteLength; }
+  catch { issue('<documents>', 'invalid catalog document'); }
+}
+function rejectDuplicates(values: readonly string[], path: string): void {
+  if (new Set(values).size !== values.length) issue(path, 'duplicate reference');
+}
+function checkRefs(snapshot: { personas: PersonaDefinition[]; models: ModelEndpoint[]; skills: SkillDefinition[]; thews: ThewEvidence[] }): void {
+  const all = new Map<string, string>();
+  for (const [kind, records] of Object.entries(snapshot) as Array<[string, Array<{ id: string }>]>) for (const [i, record] of records.entries()) {
+    if (all.has(record.id)) issue(`${kind}.records[${i}].id`, 'duplicate catalog identifier'); all.set(record.id, kind);
+  }
+  const skills = new Set(snapshot.skills.map(x => x.id)); const models = new Set(snapshot.models.map(x => x.id)); const personas = new Set(snapshot.personas.map(x => x.id)); const thews = new Set(snapshot.thews.map(x => x.id));
+  const requireSkill = (value: string, path: string) => { if (!skills.has(value)) issue(path, 'unknown skill reference'); const s = snapshot.skills.find(x => x.id === value)!; if (s.trust !== 'reviewed') issue(path, 'skill is not trusted'); };
+  snapshot.personas.forEach((p, i) => {
+    rejectDuplicates(p.requiredCapabilities, `personas.records[${i}].requiredCapabilities`); rejectDuplicates(p.requiredSkillIds, `personas.records[${i}].requiredSkillIds`); rejectDuplicates(p.defaultSkillIds, `personas.records[${i}].defaultSkillIds`); rejectDuplicates(p.eligibleSkillIds, `personas.records[${i}].eligibleSkillIds`); if (Array.isArray(p.skillsOverride)) rejectDuplicates(p.skillsOverride, `personas.records[${i}].skillsOverride`);
+    p.requiredSkillIds.forEach((x, j) => requireSkill(x, `personas.records[${i}].requiredSkillIds[${j}]`));
+    p.defaultSkillIds.forEach((x, j) => requireSkill(x, `personas.records[${i}].defaultSkillIds[${j}]`));
+    p.eligibleSkillIds.forEach((x, j) => requireSkill(x, `personas.records[${i}].eligibleSkillIds[${j}]`));
+    if (p.modelOverride) { if (!models.has(p.modelOverride)) issue(`personas.records[${i}].modelOverride`, 'unknown model reference'); const m = snapshot.models.find(x => x.id === p.modelOverride)!; if (m.availability !== 'available' || m.authorization !== 'authorized') issue(`personas.records[${i}].modelOverride`, 'model is unavailable or unauthorized'); }
+    if (Array.isArray(p.skillsOverride)) p.skillsOverride.forEach((x, j) => requireSkill(x, `personas.records[${i}].skillsOverride[${j}]`));
+    if (Array.isArray(p.skillsOverride) && !p.requiredSkillIds.every(x => p.skillsOverride!.includes(x))) issue(`personas.records[${i}].skillsOverride`, 'explicit skills must include required skills');
+  });
+  snapshot.skills.forEach((s, i) => { rejectDuplicates(s.requiredCapabilities, `skills.records[${i}].requiredCapabilities`); rejectDuplicates(s.requiredTools, `skills.records[${i}].requiredTools`); rejectDuplicates(s.prerequisites, `skills.records[${i}].prerequisites`); rejectDuplicates(s.conflicts, `skills.records[${i}].conflicts`); rejectDuplicates(s.artifactFormats, `skills.records[${i}].artifactFormats`); s.prerequisites.forEach((x, j) => requireSkill(x, `skills.records[${i}].prerequisites[${j}]`)); s.conflicts.forEach((x, j) => requireSkill(x, `skills.records[${i}].conflicts[${j}]`)); });
+  snapshot.models.forEach((m, i) => { rejectDuplicates(m.features, `models.records[${i}].features`); rejectDuplicates(m.tools, `models.records[${i}].tools`); rejectDuplicates(m.operationalEvidenceIds, `models.records[${i}].operationalEvidenceIds`); m.operationalEvidenceIds.forEach((x, j) => { if (!thews.has(x)) issue(`models.records[${i}].operationalEvidenceIds[${j}]`, 'unknown thew reference'); }); });
+  snapshot.thews.forEach((t, i) => { if (t.subject.endpointId && !models.has(t.subject.endpointId)) issue(`thews.records[${i}].subject.endpointId`, 'unknown model reference'); if (t.subject.personaId && !personas.has(t.subject.personaId)) issue(`thews.records[${i}].subject.personaId`, 'unknown persona reference'); if (t.subject.skillId && !skills.has(t.subject.skillId)) issue(`thews.records[${i}].subject.skillId`, 'unknown skill reference'); });
+}
+
+function normalizeCatalogDocumentsInternal(documents: readonly unknown[]): CatalogSnapshot {
+  const grouped = { personas: [] as PersonaDefinition[], models: [] as ModelEndpoint[], skills: [] as SkillDefinition[], thews: [] as ThewEvidence[] };
+  const versions = new Set<string>();
+  const documentVersions: Array<{ kind: DocumentKind; version: string }> = [];
+  if (!Array.isArray(documents)) issue('<documents>', 'invalid catalog documents');
+  if (documents.length > MAX_DOCUMENTS) issue('<documents>', 'catalog exceeds document limit');
+  let declaredRecords = 0;
+  for (const input of documents) {
+    if (input && typeof input === 'object' && Array.isArray((input as { records?: unknown }).records)) {
+      declaredRecords += (input as { records: unknown[] }).records.length;
+      if (declaredRecords > MAX_RECORDS) issue('<documents>.records', 'catalog exceeds record limit');
+    }
+  }
+  if (measureCatalogBytes(documents) > MAX_CATALOG_BYTES) issue('<documents>', 'catalog exceeds byte limit');
+  let records = 0;
+  let nodes = 0;
+  for (const [index, input] of documents.entries()) {
+    rejectSecretLike(input, `documents[${index}]`);
+    // Keep the aggregate budget independent of per-document scan limits.
+    const pending: unknown[] = [input]; const seen = new WeakSet<object>();
+    while (pending.length) {
+      const value = pending.pop();
+      if (++nodes > MAX_SCAN_NODES) issue(`documents[${index}]`, 'catalog exceeds node limit');
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      seen.add(value);
+      for (const child of Object.values(value as Record<string, unknown>)) pending.push(child);
+    }
+    const parsed = catalogDocumentSchema.safeParse(input);
+    if (!parsed.success) issue(`documents[${index}]`, 'invalid catalog document');
+    const document = parsed.data;
+    records += document.records.length;
+    if (records > MAX_RECORDS) issue(`documents[${index}].records`, 'catalog exceeds record limit');
+    versions.add(document.version);
+    documentVersions.push({ kind: document.kind, version: document.version });
+    grouped[document.kind].push(...clone(document.records) as never[]);
+  }
+  for (const records of Object.values(grouped)) records.sort((a, b) => codeUnitCompare(a.id, b.id));
+  checkRefs(grouped);
+  documentVersions.sort((a, b) => codeUnitCompare(a.kind, b.kind) || codeUnitCompare(a.version, b.version));
+  const base = { schemaVersion: CATALOG_SCHEMA_VERSION, canonicalizationVersion: CANONICALIZATION_VERSION, recordVersions: [...versions].sort(codeUnitCompare), documentVersions, personas: grouped.personas, models: grouped.models, skills: grouped.skills, thews: grouped.thews } as Omit<CatalogSnapshot, 'snapshotId'>;
+  const snapshotId = createHash('sha256').update(canonicalCatalogIdentity(base)).digest('hex');
+  return freeze({ ...base, snapshotId });
+}
+
+export function normalizeCatalogDocuments(documents: readonly unknown[]): CatalogSnapshot {
+  return boundary(() => normalizeCatalogDocumentsInternal(documents));
+}
+
+export function parseCatalogDocument(textValue: string, format: 'json' | 'yaml', source = '<input>'): CatalogDocument {
+  return boundary(() => parseCatalogDocumentInternal(textValue, format, source));
+}
+function parseCatalogDocumentInternal(textValue: string, format: 'json' | 'yaml', source = '<input>'): CatalogDocument {
+  if (typeof textValue !== 'string' || new TextEncoder().encode(textValue).byteLength > MAX_DOCUMENT_BYTES) issue('<document>', 'catalog document exceeds size limit');
+  if (format !== 'json' && format !== 'yaml') issue('<format>', 'unsupported catalog format');
+  const safeSource = safeToken(source, '<input>');
+  let value: unknown;
+  try { if (format === 'json') rejectDuplicateJsonKeys(textValue, safeSource); value = format === 'json' ? JSON.parse(textValue) : parseYaml(textValue, { version: '1.2' }); } catch (error) { if (error instanceof CatalogValidationError) throw error; issue(safeSource, 'malformed catalog document'); }
+  rejectSecretLike(value, safeSource);
+  const result = catalogDocumentSchema.safeParse(value);
+  if (!result.success) { const first = result.error.issues[0]; issue(`${safeSource}${first?.path.length ? `.${first.path.join('.')}` : ''}`, 'invalid catalog document'); }
+  return result.data;
+}
+
+export type CatalogSource = Readonly<{ source?: string; format: 'json' | 'yaml'; text: string }>;
+export function loadCatalogSnapshot(sources: readonly CatalogSource[]): CatalogSnapshot {
+  return boundary(() => loadCatalogSnapshotInternal(sources));
+}
+function loadCatalogSnapshotInternal(sources: readonly CatalogSource[]): CatalogSnapshot {
+  if (!Array.isArray(sources)) issue('<sources>', 'invalid catalog sources');
+  if (sources.length > MAX_DOCUMENTS) issue('<sources>', 'catalog exceeds document limit');
+  let bytes = 0;
+  const documents = sources.map((source, index) => {
+    if (!source || typeof source !== 'object' || typeof source.text !== 'string' || (source.format !== 'json' && source.format !== 'yaml')) issue(`sources[${index}]`, 'invalid catalog source');
+    // Raw source is only an availability guard; canonical aggregate accounting
+    // is applied again to the parsed documents by normalizeCatalogDocumentsInternal.
+    bytes += new TextEncoder().encode(source.text).byteLength;
+    if (bytes > MAX_CATALOG_BYTES) issue(`sources[${index}].text`, 'catalog exceeds byte limit');
+    return parseCatalogDocument(source.text, source.format, source.source ?? '<input>');
+  });
+  return normalizeCatalogDocumentsInternal(documents);
+}
+export const catalogSchemas = Object.freeze({ personaDefinitionSchema, modelEndpointSchema, skillDefinitionSchema, thewEvidenceSchema, catalogDocumentSchema });
+export { recordSchemas };
