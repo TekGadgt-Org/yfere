@@ -93,4 +93,12 @@ describe('catalog loading', () => {
     expect(() => loadCatalogSnapshot(null as never)).toThrow(CatalogValidationError);
     expect(() => normalizeCatalogDocuments(Array.from({ length: 257 }, () => ({ kind: 'skills', version: '1.0.0', records: [] })))).toThrow(/document limit/);
   });
+  it('enforces the aggregate byte budget on direct normalization and normalizes hostile accessors', () => {
+    const records = (count: number) => Array.from({ length: count }, (_, i) => ({ ...skill, id: `bounded-${i}`, description: 'x'.repeat(99_000) }));
+    expect(normalizeCatalogDocuments([{ kind: 'skills', version: '1.0.0', records: records(79) }]).skills).toHaveLength(79);
+    expect(() => normalizeCatalogDocuments([{ kind: 'skills', version: '1.0.0', records: records(81) }])).toThrow(/byte limit/);
+    expect(() => normalizeCatalogDocuments([{ get kind() { throw new Error('attacker-controlled accessor'); } }])).toThrow(CatalogValidationError);
+    expect(() => normalizeCatalogDocuments([{ get kind() { throw new Error('attacker-controlled accessor'); } }])).not.toThrow(/attacker-controlled/);
+    expect(() => loadCatalogSnapshot([{ get text() { throw new Error('attacker-controlled source'); }, format: 'json' } as never])).toThrow(CatalogValidationError);
+  });
 });

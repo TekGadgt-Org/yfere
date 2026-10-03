@@ -72,6 +72,10 @@ export class CatalogValidationError extends Error {
   readonly code = 'CATALOG_INVALID' as const;
   constructor(readonly path: string, message: string) { super(`${path}: ${message}`); this.name = 'CatalogValidationError'; }
 }
+function boundary<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) { if (error instanceof CatalogValidationError) throw error; issue('<catalog>', 'invalid catalog input'); }
+}
 
 function freeze<T>(value: T): T { if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.freeze(value); for (const child of Object.values(value as Record<string, unknown>)) freeze(child); } return value; }
 function clone<T>(value: T): T { if (typeof structuredClone === 'function') return structuredClone(value); return JSON.parse(JSON.stringify(value)) as T; }
@@ -87,10 +91,9 @@ function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
   // Source labels are diagnostic metadata, not trusted content. Never preserve
   // a label which itself resembles a credential or a local/repository path.
-  if (!text || secretValue.test(text) || privateValue.test(text) || /(?:^|[/\\])(?:\.git|\.ssh|\.env)(?:[/\\]|$)/i.test(text)) return fallback;
-  const basename = text.split(/[\\/]/).pop() ?? text;
-  const clean = basename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
-  return clean || fallback;
+  if (!text || text.length > 128 || secretValue.test(text) || privateValue.test(text) || /(?:private|repository)/i.test(text)) return fallback;
+  const clean = text.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clean) ? clean : fallback;
 }
 function safePath(path: string): string { return path.split('.').map(part => part.replace(/[^A-Za-z0-9_[\]-]/g, '_').slice(0, 96) || '<field>').join('.'); }
 function issue(path: string, message: string): never { throw new CatalogValidationError(safePath(path), message); }
@@ -120,22 +123,43 @@ const MAX_RECORDS = 50_000;
 const MAX_CATALOG_BYTES = 8_000_000;
 const MAX_SCAN_NODES = 100_000;
 const MAX_SCAN_DEPTH = 128;
-const secretValue = /(?:^|[=:_\s"'])bearer\s+[A-Za-z0-9._~+/=-]{8,}|https?:\/\/[^/@\s]+:[^/@\s]+@|(?:^|[=:_\s"'])(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
-const privateValue = /(?:^|[\s"'])(?:~\/|\.\.\/|\.\/|\/home\/|\/Users\/|[A-Za-z]:\\Users\\|git@|ssh:\/\/|file:\/\/|(?:github|gitlab|bitbucket)\.com\/[^/\s]+\/[^/\s]+(?:\.git)?)(?:[^\s"']*)/i;
+const secretValue = /(?:^|[=:_\s"'])authorization\s*:\s*bearer(?:\s|$)|(?:^|[=:_\s"'])bearer(?:\s|$)|[a-z][a-z0-9+.-]*:\/\/[^\/?#\s]*@|(?:^|[\s"'(])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)(?:[\/]|$)|[A-Za-z]:\\Users(?:\\|$)|(?:workspace|private|\.git|\.ssh|\.env)[\/]|(?:git@|ssh:\/\/)|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?(?:[\s"')]|$))|(?:^|[=:_\s"'])(?:ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{8,}|(?:^|[=:_\s"'])sk[-_](?:live|test)(?:[-_]|\b)|(?:^|[=:_\s"'])sk[-_][A-Za-z0-9]{8,}|(?:^|[=:_\s"'])pk[-_](?:live|test)[-_][A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
+const privateValue = /(?:^|[\s"'])(?:~\/|\.\.?\/|\/(?:opt|var|home|Users|root|tmp|private)\/|[A-Za-z]:\\Users\\|git@|ssh:\/\/|file:\/\/|(?:github|gitlab|bitbucket)\.com\/[^/\s]+\/[^/\s]+(?:\.git)?|(?:workspace|private)[\/])/i;
 function rejectSecretLike(value: unknown, source = '<input>'): void {
   const pending: Array<{ value: unknown; depth: number; path: string }> = [{ value, depth: 0, path: '<document>' }];
   const seen = new WeakSet<object>(); let nodes = 0;
   while (pending.length) {
     const current = pending.pop()!; if (++nodes > MAX_SCAN_NODES || current.depth > MAX_SCAN_DEPTH) issue(`${source}.<document>`, 'catalog document exceeds safety limits');
-    if (typeof current.value === 'string') { if (secretValue.test(current.value) || privateValue.test(current.value)) issue(`${source}.${current.path}`, 'secret-shaped value is not permitted'); continue; }
+    if (typeof current.value === 'string') {
+      const valueText = current.value;
+      const obviousCredential = /^\s*(?:authorization\s*:\s*)?bearer(?:\s|$)/i.test(valueText) || /(?:^|[=:_\s"'])(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[-_]/i.test(valueText);
+      if (obviousCredential || valueText.length <= 1024 || /[\\/\\@:]/.test(valueText)) {
+        if (secretValue.test(valueText) || privateValue.test(valueText)) issue(`${source}.${current.path}`, 'secret-shaped value is not permitted');
+      }
+      continue;
+    }
     if (!current.value || typeof current.value !== 'object') continue;
     if (seen.has(current.value)) continue; seen.add(current.value);
     for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
       const field = Array.isArray(current.value) ? `[${key}]` : key.replace(/[^A-Za-z0-9_-]/g, '_');
-      if (/^(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)$/i.test(key) || /(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)(?:[-_]|$)/i.test(key)) issue(`${source}.${current.path}.${field}`, 'secret-shaped field is not permitted');
+      if (/^(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)$/i.test(key) || /(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)(?:[-_]|$)/i.test(key)) issue(`${source}.${current.path}.<field>`, 'secret-shaped field is not permitted');
       pending.push({ value: child, depth: current.depth + 1, path: Array.isArray(current.value) ? `${current.path}[${key}]` : `${current.path}.${field}` });
     }
   }
+}
+function measureCatalogBytes(value: unknown): number {
+  let total = 0; const pending: unknown[] = [value]; const seen = new WeakSet<object>();
+  while (pending.length) {
+    const current = pending.pop();
+    if (typeof current === 'string') total += new TextEncoder().encode(current).byteLength;
+    else if (typeof current === 'number' || typeof current === 'boolean' || current === null) total += String(current).length;
+    else if (current && typeof current === 'object' && !seen.has(current)) {
+      seen.add(current); total += 2;
+      for (const [key, child] of Object.entries(current as Record<string, unknown>)) { total += new TextEncoder().encode(key).byteLength + 3; pending.push(child); }
+    }
+    if (total > MAX_CATALOG_BYTES) return total;
+  }
+  return total;
 }
 function rejectDuplicates(values: readonly string[], path: string): void {
   if (new Set(values).size !== values.length) issue(path, 'duplicate reference');
@@ -161,12 +185,13 @@ function checkRefs(snapshot: { personas: PersonaDefinition[]; models: ModelEndpo
   snapshot.thews.forEach((t, i) => { if (t.subject.endpointId && !models.has(t.subject.endpointId)) issue(`thews.records[${i}].subject.endpointId`, 'unknown model reference'); if (t.subject.personaId && !personas.has(t.subject.personaId)) issue(`thews.records[${i}].subject.personaId`, 'unknown persona reference'); if (t.subject.skillId && !skills.has(t.subject.skillId)) issue(`thews.records[${i}].subject.skillId`, 'unknown skill reference'); });
 }
 
-export function normalizeCatalogDocuments(documents: readonly unknown[]): CatalogSnapshot {
+function normalizeCatalogDocumentsInternal(documents: readonly unknown[]): CatalogSnapshot {
   const grouped = { personas: [] as PersonaDefinition[], models: [] as ModelEndpoint[], skills: [] as SkillDefinition[], thews: [] as ThewEvidence[] };
   const versions = new Set<string>();
   const documentVersions: Array<{ kind: DocumentKind; version: string }> = [];
   if (!Array.isArray(documents)) issue('<documents>', 'invalid catalog documents');
   if (documents.length > MAX_DOCUMENTS) issue('<documents>', 'catalog exceeds document limit');
+  if (measureCatalogBytes(documents) > MAX_CATALOG_BYTES) issue('<documents>', 'catalog exceeds byte limit');
   let records = 0;
   let nodes = 0;
   for (const [index, input] of documents.entries()) {
@@ -197,7 +222,14 @@ export function normalizeCatalogDocuments(documents: readonly unknown[]): Catalo
   return freeze({ ...base, snapshotId });
 }
 
+export function normalizeCatalogDocuments(documents: readonly unknown[]): CatalogSnapshot {
+  return boundary(() => normalizeCatalogDocumentsInternal(documents));
+}
+
 export function parseCatalogDocument(textValue: string, format: 'json' | 'yaml', source = '<input>'): CatalogDocument {
+  return boundary(() => parseCatalogDocumentInternal(textValue, format, source));
+}
+function parseCatalogDocumentInternal(textValue: string, format: 'json' | 'yaml', source = '<input>'): CatalogDocument {
   if (typeof textValue !== 'string' || new TextEncoder().encode(textValue).byteLength > MAX_DOCUMENT_BYTES) issue('<document>', 'catalog document exceeds size limit');
   if (format !== 'json' && format !== 'yaml') issue('<format>', 'unsupported catalog format');
   const safeSource = safeToken(source, '<input>');
@@ -211,6 +243,9 @@ export function parseCatalogDocument(textValue: string, format: 'json' | 'yaml',
 
 export type CatalogSource = Readonly<{ source?: string; format: 'json' | 'yaml'; text: string }>;
 export function loadCatalogSnapshot(sources: readonly CatalogSource[]): CatalogSnapshot {
+  return boundary(() => loadCatalogSnapshotInternal(sources));
+}
+function loadCatalogSnapshotInternal(sources: readonly CatalogSource[]): CatalogSnapshot {
   if (!Array.isArray(sources)) issue('<sources>', 'invalid catalog sources');
   if (sources.length > MAX_DOCUMENTS) issue('<sources>', 'catalog exceeds document limit');
   let bytes = 0;
@@ -220,7 +255,7 @@ export function loadCatalogSnapshot(sources: readonly CatalogSource[]): CatalogS
     if (bytes > MAX_CATALOG_BYTES) issue(`sources[${index}].text`, 'catalog exceeds byte limit');
     return parseCatalogDocument(source.text, source.format, source.source ?? '<input>');
   });
-  return normalizeCatalogDocuments(documents);
+  return normalizeCatalogDocumentsInternal(documents);
 }
 export const catalogSchemas = Object.freeze({ personaDefinitionSchema, modelEndpointSchema, skillDefinitionSchema, thewEvidenceSchema, catalogDocumentSchema });
 export { recordSchemas };
