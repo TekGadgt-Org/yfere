@@ -64,6 +64,7 @@ export type CatalogDocument = z.infer<typeof catalogDocumentSchema>;
 export type CatalogSnapshot = Readonly<{
   schemaVersion: typeof CATALOG_SCHEMA_VERSION; canonicalizationVersion: typeof CANONICALIZATION_VERSION; snapshotId: string;
   recordVersions: readonly string[];
+  documentVersions: readonly Readonly<{ kind: DocumentKind; version: string }>[];
   personas: readonly PersonaDefinition[]; models: readonly ModelEndpoint[]; skills: readonly SkillDefinition[]; thews: readonly ThewEvidence[];
 }>;
 
@@ -84,7 +85,11 @@ function canonicalCatalogIdentity(snapshot: Omit<CatalogSnapshot, 'snapshotId'>)
 export function canonicalizeCatalog(snapshot: Omit<CatalogSnapshot, 'snapshotId'>): string { return canonicalCatalogIdentity(snapshot); }
 function safeToken(value: unknown, fallback: string): string {
   const text = typeof value === 'string' ? value : '';
-  const clean = text.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+  // Source labels are diagnostic metadata, not trusted content. Never preserve
+  // a label which itself resembles a credential or a local/repository path.
+  if (!text || secretValue.test(text) || privateValue.test(text) || /(?:^|[/\\])(?:\.git|\.ssh|\.env)(?:[/\\]|$)/i.test(text)) return fallback;
+  const basename = text.split(/[\\/]/).pop() ?? text;
+  const clean = basename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
   return clean || fallback;
 }
 function safePath(path: string): string { return path.split('.').map(part => part.replace(/[^A-Za-z0-9_[\]-]/g, '_').slice(0, 96) || '<field>').join('.'); }
@@ -110,21 +115,25 @@ function rejectDuplicateJsonKeys(input: string, source: string): void {
   }
 }
 const MAX_DOCUMENT_BYTES = 2_000_000;
+const MAX_DOCUMENTS = 256;
+const MAX_RECORDS = 50_000;
+const MAX_CATALOG_BYTES = 8_000_000;
 const MAX_SCAN_NODES = 100_000;
 const MAX_SCAN_DEPTH = 128;
-const secretValue = /(?:^|[=:_\s])(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
-const privateValue = /(?:^|\s)(?:~\/|\/home\/|\/Users\/|[A-Za-z]:\\Users\\|git@|ssh:\/\/|file:\/\/|(?:github|gitlab|bitbucket)\.com\/[^/]+\/[^/\s]+\.git)(?:[^\s]*)/i;
+const secretValue = /(?:^|[=:_\s"'])bearer\s+[A-Za-z0-9._~+/=-]{8,}|https?:\/\/[^/@\s]+:[^/@\s]+@|(?:^|[=:_\s"'])(?:sk|pk|ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i;
+const privateValue = /(?:^|[\s"'])(?:~\/|\.\.\/|\.\/|\/home\/|\/Users\/|[A-Za-z]:\\Users\\|git@|ssh:\/\/|file:\/\/|(?:github|gitlab|bitbucket)\.com\/[^/\s]+\/[^/\s]+(?:\.git)?)(?:[^\s"']*)/i;
 function rejectSecretLike(value: unknown, source = '<input>'): void {
-  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  const pending: Array<{ value: unknown; depth: number; path: string }> = [{ value, depth: 0, path: '<document>' }];
   const seen = new WeakSet<object>(); let nodes = 0;
   while (pending.length) {
     const current = pending.pop()!; if (++nodes > MAX_SCAN_NODES || current.depth > MAX_SCAN_DEPTH) issue(`${source}.<document>`, 'catalog document exceeds safety limits');
-    if (typeof current.value === 'string') { if (secretValue.test(current.value) || privateValue.test(current.value)) issue(`${source}.<document>`, 'secret-shaped value is not permitted'); continue; }
+    if (typeof current.value === 'string') { if (secretValue.test(current.value) || privateValue.test(current.value)) issue(`${source}.${current.path}`, 'secret-shaped value is not permitted'); continue; }
     if (!current.value || typeof current.value !== 'object') continue;
     if (seen.has(current.value)) continue; seen.add(current.value);
     for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
-      if (/^(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)$/i.test(key) || /(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)(?:[-_]|$)/i.test(key)) issue(`${source}.<document>`, 'secret-shaped field is not permitted');
-      pending.push({ value: child, depth: current.depth + 1 });
+      const field = Array.isArray(current.value) ? `[${key}]` : key.replace(/[^A-Za-z0-9_-]/g, '_');
+      if (/^(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)$/i.test(key) || /(?:password|passwd|token|secret|api[-_]?key|credential|private[-_]?key)(?:[-_]|$)/i.test(key)) issue(`${source}.${current.path}.${field}`, 'secret-shaped field is not permitted');
+      pending.push({ value: child, depth: current.depth + 1, path: Array.isArray(current.value) ? `${current.path}[${key}]` : `${current.path}.${field}` });
     }
   }
 }
@@ -155,17 +164,42 @@ function checkRefs(snapshot: { personas: PersonaDefinition[]; models: ModelEndpo
 export function normalizeCatalogDocuments(documents: readonly unknown[]): CatalogSnapshot {
   const grouped = { personas: [] as PersonaDefinition[], models: [] as ModelEndpoint[], skills: [] as SkillDefinition[], thews: [] as ThewEvidence[] };
   const versions = new Set<string>();
+  const documentVersions: Array<{ kind: DocumentKind; version: string }> = [];
   if (!Array.isArray(documents)) issue('<documents>', 'invalid catalog documents');
-  for (const input of documents) { rejectSecretLike(input); const parsed = catalogDocumentSchema.safeParse(input); if (!parsed.success) issue('<document>', 'invalid catalog document'); const document = parsed.data; versions.add(document.version); grouped[document.kind].push(...clone(document.records) as never[]); }
+  if (documents.length > MAX_DOCUMENTS) issue('<documents>', 'catalog exceeds document limit');
+  let records = 0;
+  let nodes = 0;
+  for (const [index, input] of documents.entries()) {
+    rejectSecretLike(input, `documents[${index}]`);
+    // Keep the aggregate budget independent of per-document scan limits.
+    const pending: unknown[] = [input]; const seen = new WeakSet<object>();
+    while (pending.length) {
+      const value = pending.pop();
+      if (++nodes > MAX_SCAN_NODES) issue(`documents[${index}]`, 'catalog exceeds node limit');
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      seen.add(value);
+      for (const child of Object.values(value as Record<string, unknown>)) pending.push(child);
+    }
+    const parsed = catalogDocumentSchema.safeParse(input);
+    if (!parsed.success) issue(`documents[${index}]`, 'invalid catalog document');
+    const document = parsed.data;
+    records += document.records.length;
+    if (records > MAX_RECORDS) issue(`documents[${index}].records`, 'catalog exceeds record limit');
+    versions.add(document.version);
+    documentVersions.push({ kind: document.kind, version: document.version });
+    grouped[document.kind].push(...clone(document.records) as never[]);
+  }
   for (const records of Object.values(grouped)) records.sort((a, b) => codeUnitCompare(a.id, b.id));
   checkRefs(grouped);
-  const base = { schemaVersion: CATALOG_SCHEMA_VERSION, canonicalizationVersion: CANONICALIZATION_VERSION, recordVersions: [...versions].sort(codeUnitCompare), personas: grouped.personas, models: grouped.models, skills: grouped.skills, thews: grouped.thews } as Omit<CatalogSnapshot, 'snapshotId'>;
+  documentVersions.sort((a, b) => codeUnitCompare(a.kind, b.kind) || codeUnitCompare(a.version, b.version));
+  const base = { schemaVersion: CATALOG_SCHEMA_VERSION, canonicalizationVersion: CANONICALIZATION_VERSION, recordVersions: [...versions].sort(codeUnitCompare), documentVersions, personas: grouped.personas, models: grouped.models, skills: grouped.skills, thews: grouped.thews } as Omit<CatalogSnapshot, 'snapshotId'>;
   const snapshotId = createHash('sha256').update(canonicalCatalogIdentity(base)).digest('hex');
   return freeze({ ...base, snapshotId });
 }
 
 export function parseCatalogDocument(textValue: string, format: 'json' | 'yaml', source = '<input>'): CatalogDocument {
   if (typeof textValue !== 'string' || new TextEncoder().encode(textValue).byteLength > MAX_DOCUMENT_BYTES) issue('<document>', 'catalog document exceeds size limit');
+  if (format !== 'json' && format !== 'yaml') issue('<format>', 'unsupported catalog format');
   const safeSource = safeToken(source, '<input>');
   let value: unknown;
   try { if (format === 'json') rejectDuplicateJsonKeys(textValue, safeSource); value = format === 'json' ? JSON.parse(textValue) : parseYaml(textValue, { version: '1.2' }); } catch (error) { if (error instanceof CatalogValidationError) throw error; issue(safeSource, 'malformed catalog document'); }
@@ -176,6 +210,17 @@ export function parseCatalogDocument(textValue: string, format: 'json' | 'yaml',
 }
 
 export type CatalogSource = Readonly<{ source?: string; format: 'json' | 'yaml'; text: string }>;
-export function loadCatalogSnapshot(sources: readonly CatalogSource[]): CatalogSnapshot { return normalizeCatalogDocuments(sources.map(s => parseCatalogDocument(s.text, s.format, s.source ?? '<input>'))); }
+export function loadCatalogSnapshot(sources: readonly CatalogSource[]): CatalogSnapshot {
+  if (!Array.isArray(sources)) issue('<sources>', 'invalid catalog sources');
+  if (sources.length > MAX_DOCUMENTS) issue('<sources>', 'catalog exceeds document limit');
+  let bytes = 0;
+  const documents = sources.map((source, index) => {
+    if (!source || typeof source !== 'object' || typeof source.text !== 'string' || (source.format !== 'json' && source.format !== 'yaml')) issue(`sources[${index}]`, 'invalid catalog source');
+    bytes += new TextEncoder().encode(source.text).byteLength;
+    if (bytes > MAX_CATALOG_BYTES) issue(`sources[${index}].text`, 'catalog exceeds byte limit');
+    return parseCatalogDocument(source.text, source.format, source.source ?? '<input>');
+  });
+  return normalizeCatalogDocuments(documents);
+}
 export const catalogSchemas = Object.freeze({ personaDefinitionSchema, modelEndpointSchema, skillDefinitionSchema, thewEvidenceSchema, catalogDocumentSchema });
 export { recordSchemas };

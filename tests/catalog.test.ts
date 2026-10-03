@@ -77,4 +77,20 @@ describe('catalog loading', () => {
     expect(() => parseCatalogDocument(secret, 'json', 'secrets.json')).toThrow(/secrets\.json/);
     expect(() => parseCatalogDocument(secret, 'json', 'secrets.json')).not.toThrow(/sk_live/);
   });
+  it('binds document versions to their authority-bearing kind', () => {
+    const skills = doc('skills', [skill]);
+    const models = doc('models', [model]);
+    const a = loadCatalogSnapshot([{ format: 'json', text: skills }, { format: 'json', text: models }]);
+    const b = loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '2.0.0', records: [skill] }) }, { format: 'json', text: models }]);
+    expect(a.snapshotId).not.toBe(b.snapshotId);
+    expect(a.documentVersions).toEqual([{ kind: 'models', version: '1.0.0' }, { kind: 'skills', version: '1.0.0' }]);
+  });
+  it('rejects credential URLs, bearer values, relative private paths, and unsafe formats', () => {
+    for (const value of ['https://user:pass@example.test/repo', 'Authorization: Bearer abcdefghijkl', './private/config']) {
+      expect(() => parseCatalogDocument(doc('skills', [{ ...skill, description: value }]), 'json', '/home/agent/.env')).toThrow(/secret-shaped/);
+    }
+    expect(() => parseCatalogDocument(doc('skills', [skill]), 'toml' as never)).toThrow(CatalogValidationError);
+    expect(() => loadCatalogSnapshot(null as never)).toThrow(CatalogValidationError);
+    expect(() => normalizeCatalogDocuments(Array.from({ length: 257 }, () => ({ kind: 'skills', version: '1.0.0', records: [] })))).toThrow(/document limit/);
+  });
 });
