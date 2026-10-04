@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RecordedDecisionService, answerSchema, canonical, decisionRequestSchema, fixtureHash, hashManifest, questionSchema, questionSetHash, responseHash, stateHash, type RecordedFixture } from '../src/decisions/index.js';
+import { RecordedDecisionService, answerSchema, canonical, decisionRequestSchema, decisionResponseSchema, fixtureHash, hashManifest, questionSchema, questionSetHash, responseHash, stateHash, REPLAY_LIMITS, type RecordedFixture } from '../src/decisions/index.js';
 
 const makeFixture = (): RecordedFixture => {
   const request: any = { decisionId: 'd', runId: 'r', stage: 'model', round: 1, inputClasses: ['settled_prompt'], logicalCallId: 'c', state: { safe: true }, questions: { q: { kind: 'choice', instructions: 'pick', options: { a: 'A', b: 'B' } } }, catalogSnapshotId: 'catalog', policyVersion: 'policy', deadlineMs: 1000, retryBudget: 0, requestedModel: 'model', providerMode: 'recorded' };
@@ -20,6 +20,57 @@ const rekey = (source: RecordedFixture, n: number): RecordedFixture => {
   f.response.responseHash = responseHash(f.response); f.responseHash = f.response.responseHash;
   f.fixtureHash = fixtureHash(f);
   return f;
+};
+
+const exactCanonical = (size: number) => {
+  const prefix = '{"padding":"', suffix = '"}';
+  const value = { padding: 'x'.repeat(size - Buffer.byteLength(prefix + suffix)) };
+  expect(Buffer.byteLength(canonical(value))).toBe(size);
+  return value;
+};
+
+const malformedFixture = (change: (fixture: any) => void) => {
+  const fixture: any = structuredClone(makeFixture());
+  change(fixture);
+  fixture.response.responseHash = responseHash(fixture.response);
+  fixture.responseHash = fixture.response.responseHash;
+  fixture.fixtureHash = fixtureHash(fixture);
+  return fixture;
+};
+
+const sizedFixture = (target: number, seed: number, allowOverLimit = false): RecordedFixture => {
+  const questions: any = Object.create(null), answers: any = Object.create(null);
+  for (let q = 0; q < 64; q++) {
+    const options: any = Object.create(null), distribution: any = Object.create(null);
+    for (let o = 0; o < 128; o++) { options[`o${o}`] = 'x'.repeat(300); distribution[`o${o}`] = o === 0 ? 1 : 0; }
+    questions[`q${q}`] = { kind: 'choice', instructions: 'pick', options };
+    answers[`q${q}`] = { kind: 'choice', winner: 'o0', distribution };
+  }
+  const base: any = makeFixture();
+  const request: any = { ...base, decisionId: `sized-${seed}`, runId: `sized-${seed}`, logicalCallId: `sized-${seed}`, questions, response: { ...base.response, decisionId: `sized-${seed}`, logicalCallId: `sized-${seed}`, answers } };
+  let remaining = target - Buffer.byteLength(canonical(request));
+  for (const question of Object.values(questions) as any[]) for (const key of Object.keys(question.options)) {
+    const add = Math.min(212, Math.max(0, remaining)); question.options[key] += 'x'.repeat(add); remaining -= add;
+    if (!remaining) break;
+  }
+  if (remaining) throw new Error(`sized fixture target unavailable: ${target}, remaining ${remaining}`);
+  request.stateHash = stateHash(request.state); request.questionSetHash = questionSetHash(request.questions);
+  request.response.responseHash = responseHash(request.response); request.responseHash = request.response.responseHash;
+  if (!allowOverLimit) request.fixtureHash = fixtureHash(request);
+  if (!allowOverLimit) expect(Buffer.byteLength(canonical(request))).toBe(target);
+  return request;
+};
+
+const malformedScoreFixture = (change: (fixture: any) => void) => {
+  const fixture: any = structuredClone(makeFixture());
+  fixture.questions.q = { kind: 'score', instructions: 'pick', levels: ['low', 'high'] };
+  fixture.response.answers.q = { kind: 'score', level: 'high', distribution: { low: 0, high: 1 }, expected: 1 };
+  change(fixture);
+  fixture.questionSetHash = questionSetHash(fixture.questions);
+  fixture.response.responseHash = responseHash(fixture.response);
+  fixture.responseHash = fixture.response.responseHash;
+  fixture.fixtureHash = fixtureHash(fixture);
+  return fixture;
 };
 
 describe('recorded decision boundary', () => {
@@ -65,8 +116,8 @@ describe('recorded decision boundary', () => {
     const answer: any = (fixture.response.answers as any).q;
     expect(answerSchema.safeParse({ ...answer, distribution: { [valid]: 1 } }).success).toBe(true);
     expect(answerSchema.safeParse({ ...answer, distribution: { [invalid]: 1 } }).success).toBe(false);
-    expect(answerSchema.safeParse({ ...answer, distribution: { [valid]: 1 } }).success).toBe(true);
-    expect(answerSchema.safeParse({ ...answer, distribution: { [invalid]: 1 } }).success).toBe(false);
+    expect(decisionResponseSchema.safeParse({ ...fixture.response, answers: { [valid]: answer } }).success).toBe(true);
+    expect(decisionResponseSchema.safeParse({ ...fixture.response, answers: { [invalid]: answer } }).success).toBe(false);
   });
   it('enforces copied byte admission and fatal UTF-8 before parsing', () => {
     const fixture = makeFixture();
@@ -140,5 +191,76 @@ describe('recorded decision boundary', () => {
     const malformed: any = structuredClone(fixture); malformed.response.answers.q.distribution = { a: 0.2, b: 0.2 }; malformed.response.responseHash = responseHash(malformed.response); malformed.responseHash = malformed.response.responseHash; malformed.fixtureHash = fixtureHash(malformed);
     expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([malformed])))).toThrow(/INVALID_DECISION|INVALID_INPUT/);
     for (const value of [null, 1, 'x', []]) expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([value])))).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+  });
+
+  it('retains exact canonical and state size boundaries', () => {
+    expect(() => canonical(exactCanonical(REPLAY_LIMITS.canonicalBytes))).not.toThrow();
+    expect(() => canonical(exactCanonical(REPLAY_LIMITS.canonicalBytes + 1))).toThrow();
+    expect(() => stateHash(exactCanonical(REPLAY_LIMITS.stateBytes))).not.toThrow();
+    expect(() => stateHash(exactCanonical(REPLAY_LIMITS.stateBytes + 1))).toThrow();
+  });
+
+  it('admits exact complete-fixture and aggregate canonical boundaries', () => {
+    const complete = sizedFixture(REPLAY_LIMITS.canonicalBytes, 0);
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([complete])))).not.toThrow();
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([sizedFixture(REPLAY_LIMITS.canonicalBytes + 1, 1, true)])))).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+    const fixtures = Array.from({ length: 5 }, (_, seed) => sizedFixture(3_200_000, seed + 2));
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify(fixtures)))).not.toThrow();
+    const over = [...fixtures.slice(0, 4), sizedFixture(3_200_001, 7)];
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify(over)))).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+  }, 30_000);
+
+  it('retains depth, node, key, and array-slot boundaries', () => {
+    const chain = (depth: number) => { let value: any = { leaf: true }; for (let i = 0; i < depth; i++) value = { next: value }; return value; };
+    expect(() => canonical(chain(REPLAY_LIMITS.depth - 1))).not.toThrow();
+    expect(() => canonical(chain(REPLAY_LIMITS.depth))).toThrow();
+    expect(() => canonical(Array.from({ length: REPLAY_LIMITS.nodes - 1 }, () => null))).not.toThrow();
+    expect(() => canonical(Array.from({ length: REPLAY_LIMITS.nodes }, () => null))).toThrow();
+    const keys = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`k${i}`, null]));
+    expect(() => canonical(keys(REPLAY_LIMITS.keys))).not.toThrow();
+    expect(() => canonical(keys(REPLAY_LIMITS.keys + 1))).toThrow();
+    expect(() => canonical(Array.from({ length: REPLAY_LIMITS.arraySlots }, () => null))).toThrow();
+  });
+
+  it('rejects a malformed fixture after traversing a payload larger than 2.5MB', () => {
+    const fixture: any = malformedFixture((f) => { f.state = { padding: 'x'.repeat(2_500_000) }; });
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([fixture])))).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+  });
+
+  it('rejects score, distribution, answer cardinality, and provenance negatives', () => {
+    const cases = [
+      (f: any) => { f.response.answers.q = { kind: 'score', level: 'missing', distribution: { a: 2 }, expected: 0 }; },
+      (f: any) => { f.response.answers.q = { kind: 'choice', winner: 'a', distribution: { a: -1, b: 2 } }; },
+      (f: any) => { f.response.answers.q = { kind: 'choice', winner: 'a', distribution: { a: 0.2, b: 0.2 } }; },
+      (f: any) => { f.response.answers.extra = f.response.answers.q; },
+      (f: any) => { delete f.response.answers.q; },
+      (f: any) => { f.provenance = 'recorded_live'; },
+      (f: any) => { f.response.provenance = 'recorded_live'; },
+    ];
+    for (const change of cases) expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([malformedFixture(change)])))).toThrow();
+    const scoreCases = [
+      (f: any) => { f.response.answers.q.level = 'unknown'; },
+      (f: any) => { f.response.answers.q.expected = 2; },
+      (f: any) => { f.response.answers.q.distribution = { low: 0.2, high: 0.2 }; },
+    ];
+    for (const change of scoreCases) expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([malformedScoreFixture(change)])))).toThrow();
+  });
+
+  it('keeps the historical NUL tuple-collision pair distinct', async () => {
+    const first: any = rekey(makeFixture(), 1); const second: any = rekey(makeFixture(), 2);
+    first.runId = 'a'; first.logicalCallId = 'b\0c'; first.response.logicalCallId = first.logicalCallId; first.response.responseHash = responseHash(first.response); first.responseHash = first.response.responseHash; first.fixtureHash = fixtureHash(first);
+    second.runId = 'a\0b'; second.logicalCallId = 'c'; second.response.logicalCallId = second.logicalCallId; second.response.responseHash = responseHash(second.response); second.responseHash = second.response.responseHash; second.fixtureHash = fixtureHash(second);
+    const service = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([first, second])));
+    const { response: _a, provenance: _pa, ...requestA } = first;
+    const { response: _b, provenance: _pb, ...requestB } = second;
+    await expect(service.evaluate(requestA)).resolves.toMatchObject({ decisionId: first.decisionId });
+    await expect(service.evaluate(requestB)).resolves.toMatchObject({ decisionId: second.decisionId });
+  });
+
+  it('retains only the public package decision exports', async () => {
+    const exports = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).exports;
+    expect(exports).toEqual({ '.': './dist/index.js', './decisions': './dist/decisions/index.js' });
+    expect(exports['./decisions/replay']).toBeUndefined();
+    expect(exports['./decisions/contracts']).toBeUndefined();
   });
 });
