@@ -8,7 +8,7 @@ const sortExclusions = (items:Exclusion[]) => items.sort((a,b) => {
   return 0;
 });
 function sanitizeCandidate(candidate: ProposedCandidate): ProposedCandidate {
-  return { ...candidate, candidateId:'[REDACTED]', personaId:'[REDACTED]', modelId:'[REDACTED]', skillIds:candidate.skillIds.map(() => '[REDACTED]'), capabilities:candidate.capabilities.map(() => '[REDACTED]'), tools:candidate.tools.map(() => '[REDACTED]'), artifacts:candidate.artifacts.map(a => ({ ...a, artifactId:'[REDACTED]' })), reviews:candidate.reviews.map(r => ({ ...r, artifactId:'[REDACTED]', producerPersonaId:'[REDACTED]', reviewerPersonaId:'[REDACTED]' })) };
+  return { ...candidate, candidateId:`${candidate.personaId}:${candidate.modelId}` };
 }
 export function sanitizeEligibilityResult(result: EligibilityResult): EligibilityResult {
   return detached({ ...result, eligible: result.eligible.map(sanitizeCandidate), exclusions: result.exclusions.map(x => ({ ...x, candidateId: '[REDACTED]', personaId: x.personaId ? '[REDACTED]' : undefined, modelId: x.modelId ? '[REDACTED]' : undefined, skillId: x.skillId ? '[REDACTED]' : undefined, artifactId: x.artifactId ? '[REDACTED]' : undefined })) }) as EligibilityResult;

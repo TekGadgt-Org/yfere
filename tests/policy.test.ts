@@ -15,8 +15,19 @@ describe('phase 4 policy', () => {
     const result = evaluateEligibility({ catalog: catalog(), policy: policy(), candidates: [candidate()] });
     expect(result.kind).toBe('accepted');
     expect(result.eligible).toHaveLength(1);
+    expect(result.eligible[0]).toMatchObject({ candidateId: 'persona:model', personaId: 'persona', modelId: 'model', skillIds: ['required-skill'], capabilities: ['cap'], tools: ['tool'] });
     expect(evaluateEligibility({ catalog: catalog(model({ availability: 'unavailable' })), policy: policy(), candidates: [candidate()] }).exclusions[0]?.code).toBe('ENDPOINT_UNAVAILABLE');
     expect(evaluateEligibility({ catalog: catalog(model({ authorization: 'unauthorized' })), policy: policy(), candidates: [candidate()] }).exclusions[0]?.code).toBe('ENDPOINT_UNAUTHORIZED');
+  });
+  it('keeps accepted personas distinct and does not expose raw candidate identity', () => {
+    const secondPersona = { ...persona, id: 'second-persona' };
+    const twoCatalog = loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [model()] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [persona, secondPersona] }) }]);
+    const secret = `runtime-${randomUUID().replaceAll('-', '')}-secret`;
+    const result = evaluateEligibility({ catalog: twoCatalog, policy: policy({ maxAgents: 2 }), candidates: [candidate({ candidateId: secret }), candidate({ candidateId: 'another-raw-id', personaId: 'second-persona' })] as any });
+    expect(result.kind).toBe('accepted');
+    expect(result.eligible.map(member => member.personaId)).toEqual(['second-persona', 'persona']);
+    expect(new Set(result.eligible.map(member => member.candidateId)).size).toBe(2);
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
   it('rejects missing requirements and does not let optional skills mint authority', () => {
     const result = evaluateEligibility({ catalog: catalog(), policy: policy(), candidates: [candidate({ capabilities: [], tools: [], skillIds: [] })] });
