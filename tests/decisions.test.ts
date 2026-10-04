@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { RecordedDecisionService, fixtureHash, questionSetHash, responseHash, stateHash, type RecordedFixture } from '../src/decisions/index.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { RecordedDecisionService, answerSchema, canonical, decisionRequestSchema, fixtureHash, hashManifest, questionSchema, questionSetHash, responseHash, stateHash, type RecordedFixture } from '../src/decisions/index.js';
 
 const makeFixture = (): RecordedFixture => {
   const request: any = { decisionId: 'd', runId: 'r', stage: 'model', round: 1, inputClasses: ['settled_prompt'], logicalCallId: 'c', state: { safe: true }, questions: { q: { kind: 'choice', instructions: 'pick', options: { a: 'A', b: 'B' } } }, catalogSnapshotId: 'catalog', policyVersion: 'policy', deadlineMs: 1000, retryBudget: 0, requestedModel: 'model', providerMode: 'recorded' };
@@ -10,7 +13,20 @@ const makeFixture = (): RecordedFixture => {
   return fixture;
 };
 
+const rekey = (source: RecordedFixture, n: number): RecordedFixture => {
+  const f: any = structuredClone(source);
+  f.decisionId = `d-${n}`; f.runId = `r-${n}`; f.logicalCallId = `c-${n}`;
+  f.response.decisionId = f.decisionId; f.response.logicalCallId = f.logicalCallId;
+  f.response.responseHash = responseHash(f.response); f.responseHash = f.response.responseHash;
+  f.fixtureHash = fixtureHash(f);
+  return f;
+};
+
 describe('recorded decision boundary', () => {
+  it('matches the independently pinned canonical/hash golden vector', () => {
+    expect(canonical({ b: 'x', a: 1 })).toBe('{"a":1,"b":"x"}');
+    expect(hashManifest('golden', { b: 'x', a: 1 })).toBe('871b7ea57caf72b25fbab9c46aa88e59a37086b62c67cf631014b839ab9ad650');
+  });
   it('replays an admitted fixture and returns a detached response', async () => {
     const fixture = makeFixture(); const service = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([fixture])));
     const { response: _response, provenance: _provenance, ...request } = fixture;
@@ -37,13 +53,77 @@ describe('recorded decision boundary', () => {
     const { response: _response, provenance: _provenance, ...request } = changed;
     await expect(service.evaluate(request)).resolves.toMatchObject({ answers: { '__proto__': { winner: 'a' }, constructor: { winner: 'a' }, prototype: { winner: 'a' } } });
   });
+  it('enforces the 256 UTF-16 code-unit bound on every dynamic record key', () => {
+    const fixture = makeFixture();
+    const valid = 'k'.repeat(256), invalid = 'k'.repeat(257);
+    const question: any = (fixture.questions as any).q;
+    const { response: _response, provenance: _provenance, ...request } = fixture as any;
+    expect(questionSchema.safeParse({ ...question, options: { [valid]: 'A' } }).success).toBe(true);
+    expect(questionSchema.safeParse({ ...question, options: { [invalid]: 'A' } }).success).toBe(false);
+    expect(decisionRequestSchema.safeParse({ ...request, questions: { [valid]: question } }).success).toBe(true);
+    expect(decisionRequestSchema.safeParse({ ...request, questions: { [invalid]: question } }).success).toBe(false);
+    const answer: any = (fixture.response.answers as any).q;
+    expect(answerSchema.safeParse({ ...answer, distribution: { [valid]: 1 } }).success).toBe(true);
+    expect(answerSchema.safeParse({ ...answer, distribution: { [invalid]: 1 } }).success).toBe(false);
+    expect(answerSchema.safeParse({ ...answer, distribution: { [valid]: 1 } }).success).toBe(true);
+    expect(answerSchema.safeParse({ ...answer, distribution: { [invalid]: 1 } }).success).toBe(false);
+  });
   it('enforces copied byte admission and fatal UTF-8 before parsing', () => {
     const fixture = makeFixture();
     const bytes = new TextEncoder().encode(JSON.stringify([fixture]));
     expect(() => new RecordedDecisionService(new Uint8Array([0xff]))).toThrow();
     const oversized = new Uint8Array(32_000_001); oversized.set(bytes);
     expect(() => new RecordedDecisionService(oversized)).toThrow();
+    const service = new RecordedDecisionService(bytes);
+    bytes.fill(0x20);
+    const { response: _response, provenance: _provenance, ...request } = fixture;
+    return expect(service.evaluate(request)).resolves.toMatchObject({ decisionId: 'd' });
+  });
+  it('accepts exactly 32,000,000 raw bytes from bytes and filesystem paths', () => {
+    const fixture = makeFixture();
+    const json = JSON.stringify([fixture]);
+    const bytes = new Uint8Array(32_000_000);
+    bytes.set(new TextEncoder().encode(json), 0);
+    bytes.fill(0x20, new TextEncoder().encode(json).byteLength);
     expect(() => new RecordedDecisionService(bytes)).not.toThrow();
+    const dir = mkdtempSync(join(tmpdir(), 'yfere-replay-'));
+    const path = join(dir, 'fixtures.json');
+    try {
+      writeFileSync(path, bytes);
+      expect(() => new RecordedDecisionService(path)).not.toThrow();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it('rejects 32,000,001 raw bytes from bytes and filesystem paths before parsing', () => {
+    const fixture = makeFixture();
+    const json = new TextEncoder().encode(JSON.stringify([fixture]));
+    const bytes = new Uint8Array(32_000_001);
+    bytes.set(json, 0); bytes.fill(0x20, json.byteLength);
+    expect(() => new RecordedDecisionService(bytes)).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+    const dir = mkdtempSync(join(tmpdir(), 'yfere-replay-')); const path = join(dir, 'fixtures.json');
+    try { writeFileSync(path, bytes); expect(() => new RecordedDecisionService(path)).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' })); }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it('accepts 1,024 fixtures and rejects 1,025 before inspecting a later invalid child', () => {
+    const base = makeFixture();
+    const fixtures = Array.from({ length: 1024 }, (_, n) => rekey(base, n));
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify(fixtures)))).not.toThrow();
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([...fixtures, null])))).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
+  });
+  it('retains cancellation, deadline, and retry-budget precedence as typed failures', async () => {
+    const fixture = makeFixture(); const service = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([fixture])));
+    const { response: _response, provenance: _provenance, ...request } = fixture;
+    const aborted = new AbortController(); aborted.abort();
+    await expect(service.evaluate(request, aborted.signal)).rejects.toMatchObject({ code: 'CANCELLED' });
+    await expect(service.evaluate({ ...request, deadlineMs: 0 })).rejects.toMatchObject({ code: 'DEADLINE_EXCEEDED' });
+    const boundary: any = rekey(fixture, 8000); boundary.deadlineMs = 1; boundary.fixtureHash = fixtureHash(boundary);
+    const boundaryService = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([boundary])));
+    const { response: _boundaryResponse, provenance: _boundaryProvenance, ...boundaryRequest } = boundary;
+    await expect(boundaryService.evaluate(boundaryRequest)).rejects.toMatchObject({ code: 'DEADLINE_EXCEEDED' });
+    const overrun: any = rekey(fixture, 9000); overrun.response.attempts = 2;
+    overrun.response.responseHash = responseHash(overrun.response); overrun.responseHash = overrun.response.responseHash; overrun.fixtureHash = fixtureHash(overrun);
+    const retryService = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([overrun])));
+    const { response: _retryResponse, provenance: _retryProvenance, ...retryRequest } = overrun;
+    await expect(retryService.evaluate(retryRequest)).rejects.toMatchObject({ code: 'BUDGET_EXCEEDED' });
   });
   it('binds every replay pin and recomputes request content pins', async () => {
     const fixture = makeFixture(); const service = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([fixture])));
