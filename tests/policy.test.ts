@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { evaluateEligibility, reconcileTeam, type PolicyInput } from '../src/policy/index.js';
 import { loadCatalogSnapshot } from '../src/domain/catalog.js';
@@ -24,8 +25,11 @@ describe('phase 4 policy', () => {
   });
   it('reconciles equality but rejects a shared budget overflow and ownership/reviewer conflicts', () => {
     const c = candidate();
-    expect(reconcileTeam({ catalog: catalog(), policy: policy({ maxAgents: 2, budget: { sharedUnits: 8 } }), candidates: [c, { ...c, candidateId: 'persona:model-2', reservation: 4 }] }).kind).toBe('accepted');
-    expect(reconcileTeam({ catalog: catalog(), policy: policy({ maxAgents: 2, budget: { sharedUnits: 7 } }), candidates: [c, { ...c, candidateId: 'persona:model-2', reservation: 4 }] }).exclusions.map(x => x.code)).toContain('BUDGET_EXCEEDED');
+    const secondPersona = { ...persona, id: 'second-persona' };
+    const twoCatalog = loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [model()] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [persona, secondPersona] }) }]);
+    const second = { ...c, candidateId: 'second:model', personaId: 'second-persona' };
+    expect(reconcileTeam({ catalog: twoCatalog, policy: policy({ maxAgents: 2, budget: { sharedUnits: 8 } }), candidates: [c, second] as any }).kind).toBe('accepted');
+    expect(reconcileTeam({ catalog: twoCatalog, policy: policy({ maxAgents: 2, budget: { sharedUnits: 7 } }), candidates: [c, second] as any }).exclusions.map(x => x.code)).toContain('BUDGET_EXCEEDED');
   });
   it('returns exact no-match and isolates mutations', () => {
     const input = { catalog: catalog(), policy: policy(), candidates: [candidate()] };
@@ -60,5 +64,37 @@ describe('phase 4 policy', () => {
     const c = candidate({ reservation: Number.MAX_SAFE_INTEGER }) as any;
     expect(reconcileTeam({ catalog: catalog(), policy: policy({ budget: { sharedUnits: Number.MAX_SAFE_INTEGER } }), candidates: [c] }).kind).toBe('accepted');
     expect(() => evaluateEligibility({ catalog: catalog(), policy: policy({ budget: { sharedUnits: Number.MAX_SAFE_INTEGER + 1 } }), candidates: [c] })).toThrow();
+  });
+  it('keeps failed redacted candidates out of eligibility', () => {
+    const result = evaluateEligibility({ catalog: catalog(), policy: policy({ requiredFeatures: ['missing'] }), candidates: [candidate({ candidateId: 'runtime-secret-id/with-private-suffix' })] });
+    expect(result.kind).toBe('abstained');
+    expect(JSON.stringify(result)).not.toContain('runtime-secret-id');
+  });
+  it('derives capabilities and tools from policy intersections', () => {
+    expect(evaluateEligibility({ catalog: catalog(), policy: policy({ allowedCapabilities: [] }), candidates: [candidate()] }).kind).toBe('abstained');
+    expect(evaluateEligibility({ catalog: catalog(), policy: policy({ allowedTools: [] }), candidates: [candidate()] }).kind).toBe('abstained');
+    expect(evaluateEligibility({ catalog: catalog(model({ tools: [] })), policy: policy(), candidates: [candidate()] }).kind).toBe('abstained');
+  });
+  it('rejects dangling, duplicate, and misplaced review relations but accepts the bound relation', () => {
+    const reviewer = { ...persona, id: 'reviewer', requiredCapabilities: [], requiredSkillIds: [], defaultSkillIds: [], eligibleSkillIds: [], modelOverride: 'model' };
+    const c = candidate({ artifacts: [{ artifactId: 'artifact', owner: 'persona' }] });
+    const r = candidate({ candidateId: 'reviewer:model', personaId: 'reviewer', reviews: [{ artifactId: 'artifact', producerPersonaId: 'persona', reviewerPersonaId: 'reviewer' }], capabilities: [], skillIds: [], tools: [] });
+    const cCatalog = loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [model()] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [persona, reviewer] }) }]);
+    expect(reconcileTeam({ catalog: cCatalog, policy: policy({ maxAgents: 2, reviewRequired: true, requiredCapabilities: [], requiredTools: [] }), candidates: [c, r] as any }).kind).toBe('accepted');
+    expect(reconcileTeam({ catalog: cCatalog, policy: policy({ reviewRequired: true, requiredCapabilities: [], requiredTools: [] }), candidates: [c, { ...r, reviews: [...r.reviews, { artifactId: 'dangling', producerPersonaId: 'persona', reviewerPersonaId: 'reviewer' }] }] as any }).kind).toBe('abstained');
+  });
+  it('treats duplicate personas as terminal in both admission modes', () => {
+    for (const admissionPolicy of ['exact', 'allow-fewer'] as const) {
+      const result = evaluateEligibility({ catalog: catalog(), policy: policy({ admissionPolicy, maxAgents: 2 }), candidates: [candidate(), { ...candidate(), candidateId: 'second' }] });
+      expect(result.kind).toBe('abstained');
+      expect(result.eligible).toHaveLength(0);
+      expect(result.code).toBe('INSUFFICIENT_ELIGIBLE_PERSONAS');
+    }
+  });
+  it('does not reflect runtime-generated secret-shaped identifiers', () => {
+    const secret = `runtime-${randomUUID().replaceAll('-', '')}-secret`;
+    const result = reconcileTeam({ catalog: catalog(), policy: policy({ requiredFeatures: ['missing'] }), candidates: [candidate({ candidateId: secret, artifacts: [{ artifactId: `${secret}-artifact`, owner: 'persona' }] })] });
+    expect(result.kind).toBe('abstained');
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 });
