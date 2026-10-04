@@ -94,3 +94,8 @@ Phase 3 remains fixture-only and offline. It does not contact Jev or any task-ag
 Implemented: the offline configuration core; Phase 2 deterministic catalog parsing and normalization; and Phase 3 bounded recorded-decision replay with retained equality/+1 boundary, replay-binding, collision, ownership, atomicity, deadline, retry, and export regression coverage.
 
 Planned, not implemented: provider transport/authentication, live Jev-backed selection, task-agent execution, browser execution, SQLite persistence, unrestricted network integrations, catalog CLI tooling, and mutation of real projects. No command or API for those future slices should be inferred from this README.
+# Phase 4 policy engine
+
+The public `yfere/policy` surface provides closed, pure, deterministic eligibility and team reconciliation. It validates persona/model/skill requirements, endpoint availability and authorization, model compatibility, workspace and side-effect policy, finite shared reservations, exclusive artifact ownership, and independent review relations. Results are detached and deeply frozen; exclusions use a closed stable code set and are sorted by stable IDs. Unknown reservations remain unknown and fail closed only when the policy requires known values. No provider, network, credentials, filesystem mutation, semantic selection, fallback, or backfill is performed.
+
+Phase 5 will add ranking, semantic selection, dynamic skill/model questions, sequencing, assignment freeze, and replan behavior. Phase 9 remains responsible for execution, credentials, tools, artifact materialization, runtime review enforcement, and deployment.
