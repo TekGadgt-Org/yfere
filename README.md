@@ -74,3 +74,11 @@ The CLI remains the bootstrap configuration path; there is no catalog CLI comman
 Implemented: the offline configuration core and Phase 2 catalog parsing, closed-schema validation, deterministic normalization, immutable snapshots, canonical identity, and fail-closed input policy.
 
 Planned, not implemented: provider transport/authentication, live Jev and runtime/decision execution, browser execution, SQLite persistence, unrestricted network integrations, catalog CLI tooling, and mutation of real projects. No command or API for those future slices should be inferred from this README.
+# Offline recorded decision boundary
+
+The Phase 3 MVP admits only copied UTF-8 JSON bytes (or a bounded filesystem
+path); live object graphs and JSON strings are not fixture sources. Raw input is
+capped at 32,000,000 bytes, decoded with fatal UTF-8, and parsed with native
+`JSON.parse`. Native duplicate-member semantics are last-member-wins and are
+deferred hardening for this app-owned offline boundary. The documented package
+surface is `./decisions`; admission, cache, and test hooks are internal.

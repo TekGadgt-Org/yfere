@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": { ".": "./dist/index.js", "./decisions": "./dist/decisions/index.js" },
   "packageManager": "pnpm@9.15.5",
   "engines": {"node": ">=20"},
   "scripts": {"typecheck":"tsc --noEmit", "test":"vitest run", "build":"tsc", "start":"node dist/cli/index.js"},
