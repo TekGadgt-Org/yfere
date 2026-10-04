@@ -8,10 +8,30 @@ const sortExclusions = (items:Exclusion[]) => items.sort((a,b) => {
   return 0;
 });
 function sanitizeCandidate(candidate: ProposedCandidate): ProposedCandidate {
-  return { ...candidate, candidateId:`${candidate.personaId}:${candidate.modelId}` };
+  return { ...candidate, candidateId: candidate.personaId };
 }
 export function sanitizeEligibilityResult(result: EligibilityResult): EligibilityResult {
-  return detached({ ...result, eligible: result.eligible.map(sanitizeCandidate), exclusions: result.exclusions.map(x => ({ ...x, candidateId: '[REDACTED]', personaId: x.personaId ? '[REDACTED]' : undefined, modelId: x.modelId ? '[REDACTED]' : undefined, skillId: x.skillId ? '[REDACTED]' : undefined, artifactId: x.artifactId ? '[REDACTED]' : undefined })) }) as EligibilityResult;
+  const artifactRefs = new Map<string, string>();
+  const trustedPersonas = new Set(result.eligible.map(candidate => candidate.personaId));
+  const opaqueArtifactRef = (artifactId: string): string => {
+    const existing = artifactRefs.get(artifactId);
+    if (existing) return existing;
+    const reference = `artifact-ref-${artifactRefs.size}`;
+    artifactRefs.set(artifactId, reference);
+    return reference;
+  };
+  const sanitizeAcceptedCandidate = (candidate: ProposedCandidate): ProposedCandidate => ({
+    ...sanitizeCandidate(candidate),
+    artifacts: candidate.artifacts.map(artifact => ({ ...artifact, artifactId: opaqueArtifactRef(artifact.artifactId) })),
+    reviews: candidate.reviews.map(review => ({
+      ...review,
+      artifactId: opaqueArtifactRef(review.artifactId),
+      producerPersonaId: trustedPersonas.has(review.producerPersonaId) ? review.producerPersonaId : '[REDACTED]',
+      reviewerPersonaId: trustedPersonas.has(review.reviewerPersonaId) ? review.reviewerPersonaId : '[REDACTED]',
+    })),
+  });
+  const eligible = result.kind === 'accepted' ? result.eligible.map(sanitizeAcceptedCandidate) : [];
+  return detached({ ...result, eligible, exclusions: result.exclusions.map(x => ({ ...x, candidateId: '[REDACTED]', personaId: x.personaId ? '[REDACTED]' : undefined, modelId: x.modelId ? '[REDACTED]' : undefined, skillId: x.skillId ? '[REDACTED]' : undefined, artifactId: x.artifactId ? '[REDACTED]' : undefined })) }) as EligibilityResult;
 }
 export function evaluateEligibilityInternal(input:PolicyInput): EligibilityResult {
   const policy = policySchema.parse(structuredClone(input.policy));

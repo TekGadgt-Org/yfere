@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { evaluateEligibility, reconcileTeam, type PolicyInput } from '../src/policy/index.js';
+import { candidateSchema, evaluateEligibility, reconcileTeam, type PolicyInput } from '../src/policy/index.js';
 import { loadCatalogSnapshot } from '../src/domain/catalog.js';
 
 const skill = { id: 'required-skill', version: '1.0.0', contentHash: 'a'.repeat(64), trust: 'reviewed', description: 'skill', positiveExamples: ['x'], negativeExamples: [], requiredCapabilities: ['cap'], requiredTools: ['tool'], prerequisites: [], sideEffectClass: 'none', conflicts: [], instructionTokenEstimate: 4, artifactFormats: ['text'] };
 const model = (overrides = {}) => ({ id: 'model', version: '1.0.0', provider: 'fixture', requestedModel: 'model', transport: 'offline-fixture', availability: 'available', authorization: 'authorized', modalities: ['text'], features: ['feature'], tools: ['tool'], contextLimit: 100, dataHandling: 'synthetic-only', authorizationScope: 'offline', cost: { input: 'unknown', output: 'unknown' }, operationalEvidenceIds: [], ...overrides });
 const persona = { id: 'persona', version: '1.0.0', role: 'worker', positiveExamples: ['x'], negativeExamples: [], requiredCapabilities: ['cap'], outputContract: 'text', requiredSkillIds: ['required-skill'], defaultSkillIds: [], eligibleSkillIds: ['required-skill'], modelOverride: 'model', skillsOverride: 'auto', workspacePolicy: 'isolated', artifactOwnership: 'persona', reviewIndependence: true };
-const catalog = (m = model(), p = persona) => loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [m] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [{ ...p, modelOverride: m.availability === 'available' && m.authorization === 'authorized' ? 'model' : undefined }] }) }]);
+const catalog = (m = model(), p = persona) => loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [m] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [{ ...p, modelOverride: m.availability === 'available' && m.authorization === 'authorized' ? m.id : undefined }] }) }]);
 const policy = (overrides: Partial<PolicyInput['policy']> = {}): PolicyInput['policy'] => ({ taskId: 'task', taskAttemptId: 'attempt', requiredCapabilities: ['cap'], requiredTools: ['tool'], requiredFeatures: ['feature'], contextLimit: 50, allowedCapabilities: ['cap'], allowedTools: ['tool'], allowedSideEffects: ['none'], workspaceMode: 'isolated', maxAgents: 1, admissionPolicy: 'allow-fewer', mandatoryPersonaIds: [], budget: { sharedUnits: 10 }, artifactPolicy: 'exclusive', reviewRequired: false, ...overrides });
 const candidate = (overrides = {}) => ({ candidateId: 'persona:model', personaId: 'persona', modelId: 'model', skillIds: ['required-skill'], capabilities: ['cap'], tools: ['tool'], contextUse: 10, sideEffect: 'none', workspaceMode: 'isolated', reservation: 4, artifacts: [], reviews: [], ...overrides });
 
@@ -15,7 +15,7 @@ describe('phase 4 policy', () => {
     const result = evaluateEligibility({ catalog: catalog(), policy: policy(), candidates: [candidate()] });
     expect(result.kind).toBe('accepted');
     expect(result.eligible).toHaveLength(1);
-    expect(result.eligible[0]).toMatchObject({ candidateId: 'persona:model', personaId: 'persona', modelId: 'model', skillIds: ['required-skill'], capabilities: ['cap'], tools: ['tool'] });
+    expect(result.eligible[0]).toMatchObject({ candidateId: 'persona', personaId: 'persona', modelId: 'model', skillIds: ['required-skill'], capabilities: ['cap'], tools: ['tool'] });
     expect(evaluateEligibility({ catalog: catalog(model({ availability: 'unavailable' })), policy: policy(), candidates: [candidate()] }).exclusions[0]?.code).toBe('ENDPOINT_UNAVAILABLE');
     expect(evaluateEligibility({ catalog: catalog(model({ authorization: 'unauthorized' })), policy: policy(), candidates: [candidate()] }).exclusions[0]?.code).toBe('ENDPOINT_UNAUTHORIZED');
   });
@@ -107,5 +107,29 @@ describe('phase 4 policy', () => {
     const result = reconcileTeam({ catalog: catalog(), policy: policy({ requiredFeatures: ['missing'] }), candidates: [candidate({ candidateId: secret, artifacts: [{ artifactId: `${secret}-artifact`, owner: 'persona' }] })] });
     expect(result.kind).toBe('abstained');
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+  it('uses bounded opaque references for accepted artifact and review relations', () => {
+    const secretArtifact = 'runtime-secret-artifact-token';
+    const result = reconcileTeam({ catalog: catalog(), policy: policy(), candidates: [candidate({ artifacts: [{ artifactId: secretArtifact, owner: 'persona' }], reviews: [{ artifactId: secretArtifact, producerPersonaId: 'persona', reviewerPersonaId: 'persona' }] })] as any });
+    expect(result.kind).toBe('accepted');
+    const accepted = result.eligible[0]!;
+    expect(accepted.artifacts[0]!.artifactId).not.toBe(secretArtifact);
+    expect(accepted.reviews[0]!.artifactId).toBe(accepted.artifacts[0]!.artifactId);
+    expect(JSON.stringify(result)).not.toContain(secretArtifact);
+    expect(candidateSchema.safeParse(accepted).success).toBe(true);
+  });
+  it('keeps maximum-length trusted persona and model identities schema-valid', () => {
+    const longPersonaId = 'p'.repeat(128);
+    const longModelId = 'm'.repeat(128);
+    const longModel = model({ id: longModelId, requestedModel: longModelId });
+    const longPersona = { ...persona, id: longPersonaId, modelOverride: longModelId };
+    const longCatalog = catalog(longModel, longPersona);
+    const result = evaluateEligibility({ catalog: longCatalog, policy: policy(), candidates: [candidate({ candidateId: 'raw-candidate-id', personaId: longPersonaId, modelId: longModelId })] as any });
+    expect(result.kind).toBe('accepted');
+    const accepted = result.eligible[0]!;
+    expect(accepted.candidateId).toBe(longPersonaId);
+    expect(accepted.personaId).toBe(longPersonaId);
+    expect(accepted.modelId).toBe(longModelId);
+    expect(candidateSchema.safeParse(accepted).success).toBe(true);
   });
 });
