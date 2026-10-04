@@ -2,7 +2,14 @@ import { z } from 'zod';
 import { canonical, hashManifest, REPLAY_LIMITS } from './canonical.js';
 export { REPLAY_LIMITS } from './canonical.js';
 const id=z.string().min(1).max(256), digest=z.string().regex(/^[0-9a-f]{64}$/), finite=z.number().finite();
-const record=(schema:z.ZodTypeAny, max:number,min=0)=>z.record(z.string().max(256),schema).superRefine((v,c)=>{const n=Object.keys(v).length;if(n<min||n>max)c.addIssue({code:z.ZodIssueCode.custom,message:'record size out of bounds'});});
+// Zod's record parser reconstructs into ordinary objects; assignment to
+// __proto__ then changes the prototype instead of preserving the identifier.
+// Validate descriptors and reconstruct with defineProperty at the trust edge.
+const record=(schema:z.ZodTypeAny, max:number,min=0)=>z.unknown().superRefine((v,c)=>{
+  if(v===null||typeof v!=='object'||Array.isArray(v)||Object.getPrototypeOf(v)!==Object.prototype&&Object.getPrototypeOf(v)!==null){c.addIssue({code:z.ZodIssueCode.custom,message:'record required'});return;}
+  const keys=Object.keys(v as object); if(keys.length<min||keys.length>max)c.addIssue({code:z.ZodIssueCode.custom,message:'record size out of bounds'});
+  for(const key of keys){const d=Object.getOwnPropertyDescriptor(v,key);if(!d||!d.enumerable||!('value'in d)){c.addIssue({code:z.ZodIssueCode.custom,message:'record descriptor'});continue;}if(!schema.safeParse(d.value).success)c.addIssue({code:z.ZodIssueCode.custom,message:'record value'});}
+}).transform((v)=>{const out=Object.create(null) as Record<string,unknown>;for(const key of Object.keys(v as object)){const d=Object.getOwnPropertyDescriptor(v,key)!;Object.defineProperty(out,key,{value:schema.parse(d.value),enumerable:true,writable:true,configurable:true});}return out;});
 const question=z.discriminatedUnion('kind',[z.object({kind:z.literal('choice'),instructions:z.string().min(1).max(4096),criteria:z.string().max(4096).optional(),options:record(z.string().min(1).max(512),REPLAY_LIMITS.options,1)}).strict(),z.object({kind:z.literal('noul'),instructions:z.string().min(1).max(4096),criteria:z.string().max(4096).optional()}).strict(),z.object({kind:z.literal('score'),instructions:z.string().min(1).max(4096),criteria:z.string().max(4096).optional(),levels:z.array(id).min(1).max(REPLAY_LIMITS.levels)}).strict()]);
 const distribution=record(finite,REPLAY_LIMITS.options);
 const answer=z.discriminatedUnion('kind',[z.object({kind:z.literal('choice'),winner:id,distribution,confidence:finite.optional()}).strict(),z.object({kind:z.literal('noul'),value:finite}).strict(),z.object({kind:z.literal('score'),level:id,distribution,expected:finite,confidence:finite.optional()}).strict()]);

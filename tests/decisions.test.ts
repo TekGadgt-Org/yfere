@@ -25,11 +25,17 @@ describe('recorded decision boundary', () => {
     const { response: _response, provenance: _provenance, ...request } = fixture;
     return expect(service.evaluate({ ...request, runId: 'other' })).rejects.toMatchObject({ code: 'NON_REPLAYABLE' });
   });
-  it('rejects live object admission and dangerous-key collisions', () => {
+  it('preserves dangerous dynamic keys through replay', async () => {
     const fixture = makeFixture();
     expect(() => new RecordedDecisionService(JSON.stringify([fixture]) as never)).toThrow();
     const dangerous: any = Object.create(null); for (const key of ['__proto__', 'constructor', 'prototype']) dangerous[key] = { kind: 'choice', instructions: 'x', options: { a: 'A' } };
-    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([{ ...fixture, questions: dangerous }])))).toThrow();
+    const changed: any = { ...fixture, questions: dangerous, response: { ...fixture.response, answers: Object.fromEntries(Object.keys(dangerous).map((key) => [key, { kind: 'choice', winner: 'a', distribution: { a: 1 } }])) } };
+    changed.questionSetHash = questionSetHash(changed.questions);
+    changed.response.responseHash = responseHash(changed.response); changed.responseHash = changed.response.responseHash;
+    changed.fixtureHash = fixtureHash(changed);
+    const service = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([changed])));
+    const { response: _response, provenance: _provenance, ...request } = changed;
+    await expect(service.evaluate(request)).resolves.toMatchObject({ answers: { '__proto__': { winner: 'a' }, constructor: { winner: 'a' }, prototype: { winner: 'a' } } });
   });
   it('enforces copied byte admission and fatal UTF-8 before parsing', () => {
     const fixture = makeFixture();
@@ -38,5 +44,21 @@ describe('recorded decision boundary', () => {
     const oversized = new Uint8Array(32_000_001); oversized.set(bytes);
     expect(() => new RecordedDecisionService(oversized)).toThrow();
     expect(() => new RecordedDecisionService(bytes)).not.toThrow();
+  });
+  it('binds every replay pin and recomputes request content pins', async () => {
+    const fixture = makeFixture(); const service = new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([fixture])));
+    const { response: _response, provenance: _provenance, ...request } = fixture;
+    for (const field of ['stateHash','questionSetHash','providerContractHash','sdkVersion','responseHash','fixtureHash','fixtureVersion'] as const) {
+      const changed: any = { ...request, [field]: field === 'fixtureVersion' ? 'yfere-recorded/v2' : 'f'.repeat(64) };
+      await expect(service.evaluate(changed)).rejects.toMatchObject({ code: 'NON_REPLAYABLE' });
+    }
+    await expect(service.evaluate({ ...request, state: { safe: false } })).rejects.toMatchObject({ code: 'NON_REPLAYABLE' });
+    await expect(service.evaluate({ ...request, questions: { other: request.questions.q } })).rejects.toMatchObject({ code: 'NON_REPLAYABLE' });
+  });
+  it('rejects malformed response semantics and malformed fixture items with typed errors', () => {
+    const fixture = makeFixture();
+    const malformed: any = structuredClone(fixture); malformed.response.answers.q.distribution = { a: 0.2, b: 0.2 }; malformed.response.responseHash = responseHash(malformed.response); malformed.responseHash = malformed.response.responseHash; malformed.fixtureHash = fixtureHash(malformed);
+    expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([malformed])))).toThrow(/INVALID_DECISION|INVALID_INPUT/);
+    for (const value of [null, 1, 'x', []]) expect(() => new RecordedDecisionService(new TextEncoder().encode(JSON.stringify([value])))).toThrowError(expect.objectContaining({ code: 'INVALID_INPUT' }));
   });
 });
