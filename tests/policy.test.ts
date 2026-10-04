@@ -38,4 +38,27 @@ describe('phase 4 policy', () => {
     const result = evaluateEligibility({ catalog: catalog(), policy: policy({ maxAgents: 2, admissionPolicy: 'exact' }), candidates: [candidate()] });
     expect(result.code).toBe('INSUFFICIENT_ELIGIBLE_PERSONAS');
   });
+  it('enforces catalog pins and eligible skill authority', () => {
+    const extra = { ...skill, id: 'optional-skill' };
+    const c = loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill, extra] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [model()] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [persona] }) }]);
+    const result = evaluateEligibility({ catalog: c, policy: policy(), candidates: [candidate({ skillIds: ['required-skill', 'optional-skill'], capabilities: ['cap', 'admin'], tools: ['tool', 'shell'] })] });
+    expect(result.kind).toBe('abstained');
+    expect(result.exclusions.map(x => x.code)).toContain('OPTIONAL_SKILL_AUTHORITY_ESCALATION');
+  });
+  it('fails mandatory personas terminally and rejects duplicate members', () => {
+    const result = evaluateEligibility({ catalog: catalog(), policy: policy({ mandatoryPersonaIds: ['missing'] }), candidates: [candidate(), candidate()] });
+    expect(result.kind).toBe('abstained');
+    expect(result.eligible).toHaveLength(0);
+    expect(result.exclusions.map(x => x.code)).toContain('MANDATORY_PERSONA_INELIGIBLE');
+  });
+  it('requires independent review relations and preserves typed conflicts', () => {
+    const c = candidate({ artifacts: [{ artifactId: 'artifact', owner: 'persona' }] }) as any;
+    const result = reconcileTeam({ catalog: catalog(), policy: policy({ reviewRequired: true }), candidates: [c] });
+    expect(result.code).toBe('REVIEWER_NOT_INDEPENDENT');
+  });
+  it('uses checked safe budget arithmetic', () => {
+    const c = candidate({ reservation: Number.MAX_SAFE_INTEGER }) as any;
+    expect(reconcileTeam({ catalog: catalog(), policy: policy({ budget: { sharedUnits: Number.MAX_SAFE_INTEGER } }), candidates: [c] }).kind).toBe('accepted');
+    expect(() => evaluateEligibility({ catalog: catalog(), policy: policy({ budget: { sharedUnits: Number.MAX_SAFE_INTEGER + 1 } }), candidates: [c] })).toThrow();
+  });
 });
