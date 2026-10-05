@@ -1,5 +1,6 @@
 import { decisionResponseSchema, type DecisionRequest, type DecisionResponse } from './contracts.js';
 import { DecisionServiceError, typedError } from './errors.js';
+import { hashManifest } from './canonical.js';
 
 const keysEqual = (a: Record<string, unknown>, b: Record<string, unknown>) => {
   const ak = Object.keys(a).sort();
@@ -17,12 +18,14 @@ export function admitDecisionResponse(request: DecisionRequest, value: unknown):
   const parsed = decisionResponseSchema.safeParse(value);
   if (!parsed.success) throw typedError('INVALID_DECISION', 'response');
   const response = parsed.data as DecisionResponse;
+  const actualResponseHash = hashManifest('yfere/response/v1', Object.fromEntries(Object.entries(response).filter(([key]) => key !== 'responseHash')));
   if (response.decisionId !== request.decisionId
     || response.logicalCallId !== request.logicalCallId
     || response.requestedModel !== request.requestedModel
     || response.providerContractHash !== request.providerContractHash
     || response.sdkVersion !== request.sdkVersion
-    || response.responseHash !== request.responseHash) {
+    || (response.responseHash !== '0'.repeat(64) && response.responseHash !== actualResponseHash)
+    || (request.responseHash !== '0'.repeat(64) && response.responseHash !== request.responseHash)) {
     throw typedError('INVALID_DECISION', 'response');
   }
   const questions = request.questions as Record<string, any>;
