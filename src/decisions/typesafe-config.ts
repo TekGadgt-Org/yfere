@@ -9,5 +9,13 @@ export const typeSafeConfig = (config: TypeSafeConfig): TypeSafeConfig => {
   const validModel = model && ((model.kind === 'pinned' && /^jev-[0-9]+\.[0-9]+\.[0-9]+$/.test(model.value)) || (model.kind === 'alias' && (model.value === 'jev-latest' || model.value === 'jev-preview')));
   const validNumber = (n: number | undefined, min: number, max: number) => n === undefined || (Number.isFinite(n) && Number.isInteger(n) && n >= min && n <= max);
   if (!validModel || !validNumber(config.maxAttempts, 1, 4) || !validNumber(config.backoffMs, 0, 60_000) || !validNumber(config.maxBackoffMs, 0, 60_000)) throw new Error('invalid typesafe configuration');
-  return Object.freeze({ backoffMs: 0, maxBackoffMs: 5000, ...config });
+  const copiedModel = Object.freeze(model.kind === 'pinned'
+    ? { kind: 'pinned' as const, value: model.value }
+    : { kind: 'alias' as const, value: model.value });
+  return Object.freeze({
+    model: copiedModel,
+    maxAttempts: config.maxAttempts ?? 4,
+    backoffMs: config.backoffMs ?? 0,
+    maxBackoffMs: config.maxBackoffMs ?? 5000,
+  });
 };

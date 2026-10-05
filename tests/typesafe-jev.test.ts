@@ -50,4 +50,28 @@ describe('hermetic TypeSafe contract', () => {
     await expect(service.evaluate(request)).rejects.toMatchObject({ code: 'BUDGET_EXCEEDED' });
     expect(calls).toBe(0);
   });
+
+  it('detaches and freezes the configured model authority', () => {
+    const model = { kind: 'pinned' as const, value: 'jev-1.13.0' };
+    const config = typeSafeConfig({ model });
+    model.value = 'jev-9.9.9';
+    expect(config.model.value).toBe('jev-1.13.0');
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.model)).toBe(true);
+  });
+
+  it('rejects closed-answer violations and non-finite optional fields', async () => {
+    const request: any = { decisionId: 'd', runId: 'r', stage: 'persona', round: 1, inputClasses: ['settled_prompt'], logicalCallId: 'c', state: {}, questions: { q: { kind: 'choice', instructions: 'q', options: { a: 'a' } } }, catalogSnapshotId: 'cat', policyVersion: 'p', deadlineMs: 1000, retryBudget: 0, requestedModel: 'jev-1.13.0', providerMode: 'typesafe-jev', stateHash: 'a'.repeat(64), questionSetHash: 'b'.repeat(64), providerContractHash: 'c'.repeat(64), sdkVersion: 'd'.repeat(64), responseHash: '0'.repeat(64) };
+    for (const answer of [{ probabilities: { a: 1 }, extra: true }, { probabilities: { a: 1 }, confidence: Number.NaN }]) {
+      const service = new TypeSafeDecisionService(async () => ({ body: { model: 'jev-1.13.0', answers: { [correlationKey(request, 'q')]: answer } } }), { model: { kind: 'pinned', value: 'jev-1.13.0' } });
+      await expect(service.evaluate(request)).rejects.toMatchObject({ code: 'PROVIDER_MALFORMED_RESPONSE' });
+    }
+  });
+
+  it('normalizes hostile thrown accessors to a fixed unavailable error', async () => {
+    const thrown = Object.defineProperty({}, 'status', { enumerable: true, get: () => { throw new Error('SECRET-ACCESSOR-CANARY'); } });
+    const service = new TypeSafeDecisionService(async () => Promise.reject(thrown), { model: { kind: 'pinned', value: 'jev-1.13.0' } });
+    const request: any = { decisionId: 'd', runId: 'r', stage: 'persona', round: 1, inputClasses: ['settled_prompt'], logicalCallId: 'c', state: {}, questions: { q: { kind: 'choice', instructions: 'q', options: { a: 'a' } } }, catalogSnapshotId: 'cat', policyVersion: 'p', deadlineMs: 1000, retryBudget: 0, requestedModel: 'jev-1.13.0', providerMode: 'typesafe-jev', stateHash: 'a'.repeat(64), questionSetHash: 'b'.repeat(64), providerContractHash: 'c'.repeat(64), sdkVersion: 'd'.repeat(64), responseHash: '0'.repeat(64) };
+    await expect(service.evaluate(request)).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+  });
 });
