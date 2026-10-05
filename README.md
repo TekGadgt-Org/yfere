@@ -1,10 +1,11 @@
 # yfere offline core, deterministic catalogs, and recorded decisions
 
-This repository currently contains three implemented offline slices:
+This repository currently contains four implemented offline slices:
 
 - An offline, fail-closed core that validates closed runtime configuration, classifies synthetic inputs, renders a redacted effective configuration, and exposes no provider, authentication, or network transport.
 - Phase 2 deterministic domain catalogs for versioned personas, model endpoints, skills, and Thew evidence. Catalog loading validates, normalizes, and freezes data without opening a live runtime.
 - A Phase 3 recorded-decision service for deterministic replay from bounded, app-owned fixture files or copied bytes. It validates the complete fixture set before publication and performs no live provider call.
+- A Phase 4 policy engine for pure, deterministic eligibility and team reconciliation from trusted catalogs and explicit policy inputs. It returns detached, deeply frozen results and performs no live selection or execution.
 
 The implementation is standalone and offline. It does not provide provider transport or authentication, live Jev, browser execution, SQLite persistence, unrestricted network access, or real-project mutation. The approved future task-agent provider registry is codex, claude-code, and opencode-go; those provider transports and live orchestration remain planned.
 
@@ -91,10 +92,11 @@ Phase 3 remains fixture-only and offline. It does not contact Jev or any task-ag
 
 ## Current status and roadmap
 
-Implemented: the offline configuration core; Phase 2 deterministic catalog parsing and normalization; and Phase 3 bounded recorded-decision replay with retained equality/+1 boundary, replay-binding, collision, ownership, atomicity, deadline, retry, and export regression coverage.
+Implemented: the offline configuration core; Phase 2 deterministic catalog parsing and normalization; Phase 3 bounded recorded-decision replay with retained equality/+1 boundary, replay-binding, collision, ownership, atomicity, deadline, retry, and export regression coverage; and Phase 4 pure deterministic eligibility and team reconciliation.
 
 Planned, not implemented: provider transport/authentication, live Jev-backed selection, task-agent execution, browser execution, SQLite persistence, unrestricted network integrations, catalog CLI tooling, and mutation of real projects. No command or API for those future slices should be inferred from this README.
-# Phase 4 policy engine
+
+## Phase 4 policy engine
 
 The public `yfere/policy` surface provides closed, pure, deterministic eligibility and team reconciliation. It validates persona/model/skill requirements, endpoint availability and authorization, model compatibility, workspace and side-effect policy, finite shared reservations, exclusive artifact ownership, and independent review relations. Results are detached and deeply frozen; exclusions use a closed stable code set and are sorted by stable IDs. Unknown reservations remain unknown and fail closed only when the policy requires known values. No provider, network, credentials, filesystem mutation, semantic selection, fallback, or backfill is performed.
 
