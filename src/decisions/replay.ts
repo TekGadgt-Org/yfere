@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { decisionRequestRaw, decisionResponseSchema, type DecisionRequest, type DecisionResponse, type DecisionService, type RecordedFixture, stateHash, questionSetHash, REPLAY_LIMITS } from './contracts.js';
 import { canonical, detached, hashManifest } from './canonical.js';
 import { DecisionServiceError, typedError } from './errors.js';
+import { admitDecisionResponse } from './admit-response.js';
 const without=(o:Record<string,unknown>,...keys:string[])=>{const n=Object.create(null);for(const k of Object.keys(o))if(!keys.includes(k))Object.defineProperty(n,k,{value:o[k],enumerable:true,writable:true,configurable:true});return n;};
 const responsePayload=(r:DecisionResponse)=>without(r as any,'responseHash');
 const fixturePayload=(f:RecordedFixture)=>without(f as any,'fixtureHash');
@@ -13,13 +14,17 @@ function sourceBytes(source:string|Uint8Array):Uint8Array { if(typeof source==='
 function keysEqual(a:Record<string,unknown>,b:Record<string,unknown>){const ak=Object.keys(a).sort(),bk=Object.keys(b).sort();return ak.length===bk.length&&ak.every((k,i)=>k===bk[i]);}
 function validDistribution(d:Record<string,number>){const values=Object.values(d);return values.every(v=>Number.isFinite(v)&&v>=0&&v<=1)&&Math.abs(values.reduce((s,v)=>s+v,0)-1)<=1e-6;}
 function checkResponse(req:DecisionRequest,value:unknown):DecisionResponse {
+ return admitDecisionResponse(req, value);
+ /* legacy implementation retained only as a type-level boundary during the
+    Phase 5 migration; all callers return through the shared admission above. */
+ /*
  const p=decisionResponseSchema.safeParse(value); if(!p.success)throw typedError('INVALID_DECISION','response');
  const r=p.data as DecisionResponse; const questions=req.questions as Record<string,any>;
  if(r.decisionId!==req.decisionId||r.logicalCallId!==req.logicalCallId||r.requestedModel!==req.requestedModel||!keysEqual(r.answers,questions))throw typedError('INVALID_DECISION','response');
  for(const [k,q] of Object.entries(questions)){const a=(r.answers as any)[k];if(!a||a.kind!==q.kind)throw typedError('INVALID_DECISION','response');
   if(q.kind==='choice'&&a.kind==='choice'){const offered=q.options as Record<string,string>,d=a.distribution as Record<string,number>,ks=Object.keys(offered);const max=Math.max(...ks.map(x=>d[x] as number));if(!keysEqual(d,offered)||!validDistribution(d)||!Object.prototype.hasOwnProperty.call(offered,a.winner)||d[a.winner]!==max)throw typedError('INVALID_DECISION','response');}
   if(q.kind==='score'&&a.kind==='score'){const offered=q.levels as string[],d=a.distribution as Record<string,number>;const max=Math.max(...offered.map(x=>d[x] as number));const expectedKeys=Object.fromEntries(offered.map(x=>[x,true]));if(!keysEqual(d,expectedKeys)||!validDistribution(d)||!offered.includes(a.level)||d[a.level]!==max||a.expected<0||a.expected>offered.length-1)throw typedError('INVALID_DECISION','response');}
- } return r;
+ } return r; */
 }
 function sameBase(a:DecisionRequest,b:DecisionRequest){return canonical(a)===canonical(b);}
 export class RecordedDecisionService implements DecisionService {
