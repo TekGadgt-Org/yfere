@@ -1,6 +1,5 @@
-import { readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { decisionRequestRaw, decisionResponseSchema, type DecisionRequest, type DecisionResponse, type DecisionService, type RecordedFixture, stateHash, questionSetHash, REPLAY_LIMITS } from './contracts.js';
+import { statSync, openSync, readSync, closeSync } from 'node:fs';
+import { decisionRequestRaw, type DecisionRequest, type DecisionResponse, type DecisionService, type RecordedFixture, stateHash, questionSetHash, REPLAY_LIMITS } from './contracts.js';
 import { canonical, detached, hashManifest } from './canonical.js';
 import { DecisionServiceError, typedError } from './errors.js';
 import { admitDecisionResponse } from './admit-response.js';
@@ -11,20 +10,8 @@ export const responseHash=(r:DecisionResponse)=>hashManifest('yfere/response/v1'
 export const fixtureHash=(f:RecordedFixture)=>hashManifest('yfere/fixture/v1',fixturePayload(f));
 function parseBytes(bytes:Uint8Array):unknown { const copy=new Uint8Array(bytes); let text:string; try{text=new TextDecoder('utf-8',{fatal:true}).decode(copy);}catch{throw typedError('INVALID_INPUT','decode');} try{return JSON.parse(text);}catch{throw typedError('INVALID_INPUT','parse');} }
 function sourceBytes(source:string|Uint8Array):Uint8Array { if(typeof source==='string'){try{const size=statSync(source).size;if(size>32_000_000)throw typedError('INVALID_INPUT','raw');const fd=openSync(source,'r');const out=new Uint8Array(32_000_001);const n=readSync(fd,out,0,out.length,0);closeSync(fd);if(n>32_000_000)throw typedError('INVALID_INPUT','raw');return out.slice(0,n);}catch(e){if(e instanceof DecisionServiceError)throw e;throw typedError('INVALID_INPUT','source');}} if(!(source instanceof Uint8Array))throw typedError('INVALID_INPUT','source'); if(source.byteLength>32_000_000)throw typedError('INVALID_INPUT','raw'); return new Uint8Array(source); }
-function keysEqual(a:Record<string,unknown>,b:Record<string,unknown>){const ak=Object.keys(a).sort(),bk=Object.keys(b).sort();return ak.length===bk.length&&ak.every((k,i)=>k===bk[i]);}
-function validDistribution(d:Record<string,number>){const values=Object.values(d);return values.every(v=>Number.isFinite(v)&&v>=0&&v<=1)&&Math.abs(values.reduce((s,v)=>s+v,0)-1)<=1e-6;}
 function checkResponse(req:DecisionRequest,value:unknown):DecisionResponse {
  return admitDecisionResponse(req, value);
- /* legacy implementation retained only as a type-level boundary during the
-    Phase 5 migration; all callers return through the shared admission above. */
- /*
- const p=decisionResponseSchema.safeParse(value); if(!p.success)throw typedError('INVALID_DECISION','response');
- const r=p.data as DecisionResponse; const questions=req.questions as Record<string,any>;
- if(r.decisionId!==req.decisionId||r.logicalCallId!==req.logicalCallId||r.requestedModel!==req.requestedModel||!keysEqual(r.answers,questions))throw typedError('INVALID_DECISION','response');
- for(const [k,q] of Object.entries(questions)){const a=(r.answers as any)[k];if(!a||a.kind!==q.kind)throw typedError('INVALID_DECISION','response');
-  if(q.kind==='choice'&&a.kind==='choice'){const offered=q.options as Record<string,string>,d=a.distribution as Record<string,number>,ks=Object.keys(offered);const max=Math.max(...ks.map(x=>d[x] as number));if(!keysEqual(d,offered)||!validDistribution(d)||!Object.prototype.hasOwnProperty.call(offered,a.winner)||d[a.winner]!==max)throw typedError('INVALID_DECISION','response');}
-  if(q.kind==='score'&&a.kind==='score'){const offered=q.levels as string[],d=a.distribution as Record<string,number>;const max=Math.max(...offered.map(x=>d[x] as number));const expectedKeys=Object.fromEntries(offered.map(x=>[x,true]));if(!keysEqual(d,expectedKeys)||!validDistribution(d)||!offered.includes(a.level)||d[a.level]!==max||a.expected<0||a.expected>offered.length-1)throw typedError('INVALID_DECISION','response');}
- } return r; */
 }
 function sameBase(a:DecisionRequest,b:DecisionRequest){
  const normalize=(request:DecisionRequest, reference:DecisionRequest)=>({ ...request, responseHash:request.responseHash==='0'.repeat(64)?reference.responseHash:request.responseHash, fixtureHash:request.fixtureHash==='0'.repeat(64)?reference.fixtureHash:request.fixtureHash });
