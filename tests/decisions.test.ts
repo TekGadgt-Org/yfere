@@ -259,7 +259,7 @@ describe('recorded decision boundary', () => {
 
   it('retains only the public package decision exports', async () => {
     const exports = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).exports;
-    expect(exports).toEqual({ '.': './dist/index.js', './decisions': './dist/decisions/index.js', './policy': './dist/policy/index.js' });
+    expect(exports).toEqual({ '.': './dist/index.js', './decisions': './dist/decisions/index.js', './policy': './dist/policy/index.js', './selection': './dist/selection/index.js' });
     expect(exports['./decisions/replay']).toBeUndefined();
     expect(exports['./decisions/contracts']).toBeUndefined();
   });
