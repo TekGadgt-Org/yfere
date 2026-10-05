@@ -1,103 +1,51 @@
-# yfere offline core, deterministic catalogs, and recorded decisions
+# yfere
 
-This repository currently contains four implemented offline slices:
+Yfere is an offline TypeScript core for deterministic catalogs, recorded decision replay, policy evaluation, and two-stage persona/model/skill selection. It validates bounded inputs and freezes results; it does not execute agents or call providers.
 
-- An offline, fail-closed core that validates closed runtime configuration, classifies synthetic inputs, renders a redacted effective configuration, and exposes no provider, authentication, or network transport.
-- Phase 2 deterministic domain catalogs for versioned personas, model endpoints, skills, and Thew evidence. Catalog loading validates, normalizes, and freezes data without opening a live runtime.
-- A Phase 3 recorded-decision service for deterministic replay from bounded, app-owned fixture files or copied bytes. It validates the complete fixture set before publication and performs no live provider call.
-- A Phase 4 policy engine for pure, deterministic eligibility and team reconciliation from trusted catalogs and explicit policy inputs. It returns detached, deeply frozen results and performs no live selection or execution.
+## Implemented capabilities
 
-The implementation is standalone and offline. It does not provide provider transport or authentication, live Jev, browser execution, SQLite persistence, unrestricted network access, or real-project mutation. The approved future task-agent provider registry is codex, claude-code, and opencode-go; those provider transports and live orchestration remain planned.
+- Offline configuration parsing and redacted effective-configuration rendering (JSON/YAML).
+- Phase 2 deterministic catalogs for personas, model endpoints, skills, and Thew evidence, including validation, normalization, canonical identity, limits, and frozen snapshots.
+- Phase 3 bounded recorded-decision replay from fixture files or copied bytes, with exact request/response binding and typed failures.
+- Phase 4 pure policy eligibility and team reconciliation over trusted catalogs and explicit policy inputs.
+- Phase 5 pure, detached two-stage selection: persona roster first, then model and model-conditioned skill choices, with deterministic policy re-checks, pins, traces, and assignment IDs.
 
-Requirements: Node 20+ and pnpm 9.15.5.
+Detailed behavior is in [Current capabilities](docs/current-capabilities.md). The repository's longer architectural and contract decisions remain in [architecture](docs/architecture.md) and [decision contracts](docs/decision-contracts.md).
 
-## Phase 2 catalogs
+## Prerequisites and quick start
 
-A catalog document is JSON or YAML with a closed schema and one of four document kinds:
+Node.js 20 or newer and pnpm 9.15.5 are required.
 
-- `personas`: persona definitions, including capability and skill references and workspace/review policy.
-- `models`: model endpoint descriptions, availability/authorization state, modalities, limits, cost, and operational evidence references.
-- `skills`: versioned skill metadata, content hash, trust, prerequisites, side-effect class, conflicts, and artifact formats.
-- `thews`: Thew evidence records connecting a metric and rubric to a subject, value, uncertainty, provenance, and validity status.
+```sh
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm build
+pnpm start -- --config examples/synthetic.json
+```
 
-Parsing rejects malformed input, duplicate JSON keys, unknown fields, unsupported formats, secret-shaped values, and unsafe or private repository references. Normalization is deterministic: records and references are validated, dangling or duplicate references fail closed, and document order does not affect the result. Snapshots are deep-frozen. Their canonical JSON identity uses recursively sorted object keys and stable array/record ordering; `snapshotId` is the SHA-256 digest of that canonical identity (without the `snapshotId` field). The canonical aggregate is limited to 8,000,000 bytes; individual source documents and document/record/node/depth limits are also bounded.
+The CLI prints a redacted effective configuration. Configuration is the current bootstrap surface; there is no catalog or live-selection CLI.
 
-The public Phase 2 API is exported from `src/domain/index.ts`:
+## Package API
 
-- `CATALOG_SCHEMA_VERSION`, `CANONICALIZATION_VERSION`, and `OFFLINE_POLICY_VERSION`
-- `personaDefinitionSchema`, `modelEndpointSchema`, `skillDefinitionSchema`, `thewEvidenceSchema`, `catalogDocumentSchema`, and `catalogSchemas`
-- `parseCatalogDocument`, `normalizeCatalogDocuments`, `loadCatalogSnapshot`, and `canonicalizeCatalog`
-- `CatalogValidationError`
-- Types `CatalogDocument`, `CatalogSnapshot`, `CatalogSource`, `DocumentKind`, `PersonaDefinition`, `ModelEndpoint`, `SkillDefinition`, and `ThewEvidence`
+The package exports the implemented APIs from the package root and these subpaths:
 
-For example, application code can load a checked-in source and use the resulting immutable snapshot:
+- `yfere` — decisions, policy, selection, and shared exports.
+- `yfere/decisions` — recorded replay, schemas, canonicalization, hashes, and typed errors.
+- `yfere/policy` — eligibility and team reconciliation contracts and functions.
+- `yfere/selection` — selector contracts, normalization, decision-request construction, and `selectRoster`/`select`.
 
-    import { loadCatalogSnapshot } from './dist/domain/index.js';
+After `pnpm build`, a compact selection call can use the exported `selectRoster` function with a normalized catalog, task policy, settled prompt, and recorded or deterministic answers. See [Current capabilities](docs/current-capabilities.md) for the boundaries and inputs; [Testing](docs/testing.md) contains package import smoke checks.
 
-    const jsonText = JSON.stringify({
-      kind: 'skills', version: '1.0.0', records: [{
-        id: 'review-skill', version: '1.0.0',
-        contentHash: '0000000000000000000000000000000000000000000000000000000000000000',
-        trust: 'reviewed', description: 'A documented review skill',
-        positiveExamples: ['Review the change'], negativeExamples: [],
-        requiredCapabilities: [], requiredTools: [], prerequisites: [],
-        sideEffectClass: 'none', conflicts: [], instructionTokenEstimate: 10,
-        artifactFormats: ['markdown'],
-      }],
-    });
-    const yamlText = `kind: models
-    version: 1.0.0
-    records: []`;
+## Offline boundary and current limitations
 
-    const snapshot = loadCatalogSnapshot([
-      { source: 'catalog/skills.json', format: 'json', text: jsonText },
-      { source: 'catalog/models.yaml', format: 'yaml', text: yamlText },
-    ]);
-    console.log(snapshot.snapshotId, snapshot.skills.length);
+All implemented paths are offline and fail closed. This repository does not provide live Jev/provider transport or authentication, task-agent execution, browser execution, persistence, telemetry, unrestricted network access, catalog CLI tooling, or real-project mutation. The provider names `codex`, `claude-code`, and `opencode-go` describe a future registry only; their transports are not implemented here. Phase 5 accepts recorded answers through its selection API and does not construct a live client, persist decisions, or perform fallback/backfill.
 
-`parseCatalogDocument(text, format, source)` is useful when a single document must be inspected before normalization. `normalizeCatalogDocuments(documents)` accepts already parsed documents. `canonicalizeCatalog(snapshotWithoutId)` returns the canonical JSON used for identity checks.
+## Testing
 
-### Security and privacy boundary
+The complete verification recipe, including frozen install, focused suites, package and CLI smoke checks, link/path checks, diff checks, and clean-tree checks, is in [Testing](docs/testing.md). The normal suite is:
 
-Catalog inputs are treated as untrusted. Credentials, credential-shaped fields and values, known-host private repository references, local/private paths, SSH/file URLs, and private-key material fail closed. Diagnostics use fixed, sanitized paths and source labels rather than reflecting hostile content; raw sensitive values are not emitted. Hostile accessors/proxies and unsupported serialization values are isolated and normalized into `CatalogValidationError` results instead of escaping attacker-controlled exceptions.
+```sh
+pnpm typecheck && pnpm build && pnpm test
+```
 
-## Configuration CLI
-
-The CLI remains the bootstrap configuration path; there is no catalog CLI command. Configuration is JSON or YAML. Overrides are global only; unknown keys, profile/provider/persona scopes, unbounded values, and implicit raw capture fail closed. CLI output is redacted and contains no secret values.
-
-    pnpm install --frozen-lockfile
-    pnpm typecheck
-    pnpm test
-    pnpm build
-    pnpm start -- --config examples/synthetic.json
-
-## Phase 3 recorded-decision replay
-
-`RecordedDecisionService` provides deterministic, offline replay of previously recorded decision responses. Construct it with either a filesystem path or a `Uint8Array`/`Buffer` containing a JSON array of fixtures. The service copies byte inputs, validates the entire fixture set atomically, and returns detached response values so caller mutation cannot alter later replay.
-
-The Phase 3 MVP deliberately accepts files or copied bytes rather than arbitrary live JavaScript object graphs or JSON strings. Admission applies these boundaries:
-
-- Raw input is capped at 32,000,000 bytes before parsing.
-- UTF-8 decoding is fatal, followed by native `JSON.parse`.
-- Native duplicate-member behavior is last-member-wins; duplicate-member rejection is deferred hardening for this app-owned offline boundary.
-- Fixtures use closed request, response, question, answer, provenance, version, and digest schemas.
-- Dynamic identifiers are nonempty and limited to 256 UTF-16 code units. Literal `__proto__`, `constructor`, and `prototype` identifiers remain data and are preserved safely.
-- A set may contain at most 1,024 fixtures. Canonical limits include 4,000,000 bytes per fixture, 16,000,000 bytes in aggregate, 1,000,000 bytes of state, depth 128, 100,000 nodes, and 10,000 object keys.
-- Replay requires the exact tuple identity and exact state, question, provider-contract, SDK, response, fixture, and fixture-version bindings. A mismatch returns `NON_REPLAYABLE` rather than falling through to live evaluation.
-- Cancellation, deadlines, and retry budgets fail with typed `DecisionServiceError` results.
-
-The public package surfaces are the package root and `yfere/decisions`. They export `RecordedDecisionService`, fixture and manifest hash helpers, schemas, limits, canonicalization helpers, `DecisionServiceError`, and the associated TypeScript types. Internal replay modules, admission hooks, and test hooks are not exported.
-
-Phase 3 remains fixture-only and offline. It does not contact Jev or any task-agent provider, authenticate credentials, access the network, execute browser automation, persist telemetry, or mutate a project.
-
-## Current status and roadmap
-
-Implemented: the offline configuration core; Phase 2 deterministic catalog parsing and normalization; Phase 3 bounded recorded-decision replay with retained equality/+1 boundary, replay-binding, collision, ownership, atomicity, deadline, retry, and export regression coverage; Phase 4 pure deterministic eligibility and team reconciliation; and Phase 5's pure, detached two-stage persona/model/skill selector. Phase 5 validates closed offers and normalized distributions, applies field-wise pins, re-runs Phase 4 policy before freezing deterministic assignment IDs, and exposes traces without persistence or live provider access.
-
-Planned, not implemented: provider transport/authentication, live Jev-backed selection, task-agent execution, browser execution, SQLite persistence, unrestricted network integrations, catalog CLI tooling, and mutation of real projects. The Phase 5 API accepts recorded answers through `selectRoster` from `yfere/selection`; it does not construct a live client, persist decisions, or perform fallback/backfill. No command or API for those future slices should be inferred from this README.
-
-## Phase 4 policy engine
-
-The public `yfere/policy` surface provides closed, pure, deterministic eligibility and team reconciliation. It validates persona/model/skill requirements, endpoint availability and authorization, model compatibility, workspace and side-effect policy, finite shared reservations, exclusive artifact ownership, and independent review relations. Results are detached and deeply frozen; exclusions use a closed stable code set and are sorted by stable IDs. Unknown reservations remain unknown and fail closed only when the policy requires known values. No provider, network, credentials, filesystem mutation, semantic selection, fallback, or backfill is performed.
-
-Phase 5 selection is available from the package root and `yfere/selection`. Phase 9 remains responsible for execution, credentials, tools, artifact materialization, runtime review enforcement, and deployment.
+This project is private and currently version `0.1.0`; its package exports and scripts are defined in `package.json`.
