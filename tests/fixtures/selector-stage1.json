@@ -1,0 +1,74 @@
+[
+  {
+    "decisionId": "3502f5301e679b43c5868b78f2c8ea245ce7cfa676812abb6bcfa44412f649d7",
+    "runId": "fixture-run",
+    "stage": "persona",
+    "round": 1,
+    "inputClasses": [
+      "settled_prompt",
+      "persona_definitions"
+    ],
+    "logicalCallId": "0ca6da507e0453bafefb7c2195a5b83722a85a6603b7f23ef98f8c3cbfac63d5",
+    "state": {
+      "settledPrompt": "do work",
+      "stage": "persona",
+      "key": "persona",
+      "offered": [
+        "coder",
+        "none",
+        "writer"
+      ],
+      "task": "task",
+      "catalogSnapshotId": "31114357402fb34f83d0e6216c175bb0208833deba488dc373d1171765f2376d",
+      "policyVersion": "task"
+    },
+    "questions": {
+      "persona": {
+        "kind": "choice",
+        "instructions": "Select one offered persona identifier.",
+        "options": {
+          "coder": "coder",
+          "none": "none",
+          "writer": "writer"
+        }
+      }
+    },
+    "catalogSnapshotId": "31114357402fb34f83d0e6216c175bb0208833deba488dc373d1171765f2376d",
+    "policyVersion": "task",
+    "deadlineMs": 30000,
+    "retryBudget": 2,
+    "requestedModel": "fixture",
+    "providerMode": "recorded",
+    "stateHash": "d94872147a46431419d84bee3bff9b4984e0eb2b95ad5820c24f4bcd3a5c455a",
+    "questionSetHash": "e7d696624d63393647fefb8118ddd6ccb2564d083fba1f569b63312bdb6980df",
+    "providerContractHash": "77293ad6b5a48afa9da74a4dbbb80c4820c1cbc5c634ac3fcf4331e98ff123b7",
+    "sdkVersion": "77293ad6b5a48afa9da74a4dbbb80c4820c1cbc5c634ac3fcf4331e98ff123b7",
+    "responseHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "fixtureVersion": "yfere-recorded/v1",
+    "fixtureHash": "51fe8d590cadbbcc225b95e02364fa694183f5ae34859c4471deb66485e1bff2",
+    "provenance": "synthetic",
+    "response": {
+      "decisionId": "3502f5301e679b43c5868b78f2c8ea245ce7cfa676812abb6bcfa44412f649d7",
+      "logicalCallId": "0ca6da507e0453bafefb7c2195a5b83722a85a6603b7f23ef98f8c3cbfac63d5",
+      "provider": "fixture",
+      "requestedModel": "fixture",
+      "answers": {
+        "persona": {
+          "kind": "choice",
+          "winner": "writer",
+          "distribution": {
+            "writer": 1,
+            "coder": 0,
+            "none": 0
+          }
+        }
+      },
+      "elapsedMs": 0,
+      "attempts": 1,
+      "provenance": "synthetic",
+      "providerContractHash": "77293ad6b5a48afa9da74a4dbbb80c4820c1cbc5c634ac3fcf4331e98ff123b7",
+      "sdkVersion": "77293ad6b5a48afa9da74a4dbbb80c4820c1cbc5c634ac3fcf4331e98ff123b7",
+      "responseHash": "c0fe50616adfc2009f89e68a3ba6f55d3b8b80715c3abe992b316071b1dbf430"
+    }
+  }
+]

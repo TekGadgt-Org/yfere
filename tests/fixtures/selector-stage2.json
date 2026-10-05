@@ -1,0 +1,209 @@
+[
+  {
+    "decisionId": "5c043324f3a8d360bc2170730ad74c752afd54977ef4e8d37f590902c21246d1",
+    "runId": "fixture-stage2",
+    "stage": "persona",
+    "round": 1,
+    "inputClasses": [
+      "settled_prompt",
+      "persona_definitions"
+    ],
+    "logicalCallId": "4db395bc4d690047b0fd635d6fffbe34ba7b10a6b0d8bf9e6198f801b0be9ae1",
+    "state": {
+      "settledPrompt": "do work",
+      "stage": "persona",
+      "key": "persona",
+      "offered": [
+        "none",
+        "writer"
+      ],
+      "task": "task",
+      "catalogSnapshotId": "83703c6077ee5b4398360412b90ecee1095d5764d4c20c55d7f45086b7a4be10",
+      "policyVersion": "task"
+    },
+    "questions": {
+      "persona": {
+        "kind": "choice",
+        "instructions": "Select one offered persona identifier.",
+        "options": {
+          "none": "none",
+          "writer": "writer"
+        }
+      }
+    },
+    "catalogSnapshotId": "83703c6077ee5b4398360412b90ecee1095d5764d4c20c55d7f45086b7a4be10",
+    "policyVersion": "task",
+    "deadlineMs": 30000,
+    "retryBudget": 2,
+    "requestedModel": "fixture",
+    "providerMode": "recorded",
+    "stateHash": "a7cab6dda5b15e74f493afee84031cacfe6884ab3b858fcb5f8bfe7a84c3d641",
+    "questionSetHash": "fca10402364e559ee274518e78ac6b173c7dcda5f9a045d9a5ddbe3a1638a2cc",
+    "providerContractHash": "09ee3bf2347e45739375244dbfc83f342cce4739375d08b545fe02fa32afa1b5",
+    "sdkVersion": "09ee3bf2347e45739375244dbfc83f342cce4739375d08b545fe02fa32afa1b5",
+    "responseHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "fixtureVersion": "yfere-recorded/v1",
+    "fixtureHash": "8f9b159c162953b4fa5cab9d0c257514d1b7b522699f254b2e6a459b15f3e060",
+    "provenance": "synthetic",
+    "response": {
+      "decisionId": "5c043324f3a8d360bc2170730ad74c752afd54977ef4e8d37f590902c21246d1",
+      "logicalCallId": "4db395bc4d690047b0fd635d6fffbe34ba7b10a6b0d8bf9e6198f801b0be9ae1",
+      "provider": "fixture",
+      "requestedModel": "fixture",
+      "answers": {
+        "persona": {
+          "kind": "choice",
+          "winner": "writer",
+          "distribution": {
+            "writer": 1,
+            "none": 0
+          }
+        }
+      },
+      "elapsedMs": 0,
+      "attempts": 1,
+      "provenance": "synthetic",
+      "providerContractHash": "09ee3bf2347e45739375244dbfc83f342cce4739375d08b545fe02fa32afa1b5",
+      "sdkVersion": "09ee3bf2347e45739375244dbfc83f342cce4739375d08b545fe02fa32afa1b5",
+      "responseHash": "badb00beb22249b46ce8a0745dc80b6eaf9472e84758b2f8d1cbf35806be1d5a"
+    }
+  },
+  {
+    "decisionId": "65b33f4abe8a63ae5ef184e6261f2b1b7bbfb65b9572a34ad7c55c7e3e639dd5",
+    "runId": "fixture-stage2",
+    "stage": "model",
+    "round": 2,
+    "inputClasses": [
+      "settled_prompt",
+      "model_catalog_metadata"
+    ],
+    "logicalCallId": "504cf09700c154abc580eeda6dee34cc8b275a6e77c9a4c45fedc984395fc38b",
+    "state": {
+      "settledPrompt": "do work",
+      "stage": "model",
+      "key": "model:writer",
+      "offered": [
+        "model",
+        "model2"
+      ],
+      "task": "task",
+      "catalogSnapshotId": "83703c6077ee5b4398360412b90ecee1095d5764d4c20c55d7f45086b7a4be10",
+      "policyVersion": "task"
+    },
+    "questions": {
+      "model:writer": {
+        "kind": "choice",
+        "instructions": "Select one offered model identifier.",
+        "options": {
+          "model": "model",
+          "model2": "model2"
+        }
+      }
+    },
+    "catalogSnapshotId": "83703c6077ee5b4398360412b90ecee1095d5764d4c20c55d7f45086b7a4be10",
+    "policyVersion": "task",
+    "deadlineMs": 30000,
+    "retryBudget": 2,
+    "requestedModel": "fixture",
+    "providerMode": "recorded",
+    "stateHash": "d60292654996f961066436f3d28db346dbbf39f74c6a598e6dcd482538340b23",
+    "questionSetHash": "eca37efc8173e9967ae2f4166a5dd9989ea1420c123cb337a83e8f2b5664a714",
+    "providerContractHash": "061f35739de1a0fd1dba3165997fa959060dea5fe9c0ef879f94454b70fa58c7",
+    "sdkVersion": "061f35739de1a0fd1dba3165997fa959060dea5fe9c0ef879f94454b70fa58c7",
+    "responseHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "fixtureVersion": "yfere-recorded/v1",
+    "fixtureHash": "fc1d313c35f0f7470569735bc02d260bdd6d5dd3fb1b163118f364b293ffd150",
+    "provenance": "synthetic",
+    "response": {
+      "decisionId": "65b33f4abe8a63ae5ef184e6261f2b1b7bbfb65b9572a34ad7c55c7e3e639dd5",
+      "logicalCallId": "504cf09700c154abc580eeda6dee34cc8b275a6e77c9a4c45fedc984395fc38b",
+      "provider": "fixture",
+      "requestedModel": "fixture",
+      "answers": {
+        "model:writer": {
+          "kind": "choice",
+          "winner": "model",
+          "distribution": {
+            "model": 1,
+            "model2": 0
+          }
+        }
+      },
+      "elapsedMs": 0,
+      "attempts": 1,
+      "provenance": "synthetic",
+      "providerContractHash": "061f35739de1a0fd1dba3165997fa959060dea5fe9c0ef879f94454b70fa58c7",
+      "sdkVersion": "061f35739de1a0fd1dba3165997fa959060dea5fe9c0ef879f94454b70fa58c7",
+      "responseHash": "4fce9a4a9758628caf0835ab498d2c1fd5edd1fc4a5a50f3faf1c788c914d305"
+    }
+  },
+  {
+    "decisionId": "d243307429197edf14422459dc0dcfd643d131eeae7540b3b9621cd0221c12d2",
+    "runId": "fixture-stage2",
+    "stage": "skill",
+    "round": 2,
+    "inputClasses": [
+      "settled_prompt",
+      "skill_catalog_metadata"
+    ],
+    "logicalCallId": "6e26a464909c0b10231be0f6c7ea715b8ccc8e4658b7f33621c65af92b25e25e",
+    "state": {
+      "settledPrompt": "do work",
+      "stage": "skill",
+      "key": "skill:writer",
+      "offered": [
+        "optional",
+        "none"
+      ],
+      "task": "task",
+      "catalogSnapshotId": "83703c6077ee5b4398360412b90ecee1095d5764d4c20c55d7f45086b7a4be10",
+      "policyVersion": "task"
+    },
+    "questions": {
+      "skill:writer": {
+        "kind": "choice",
+        "instructions": "Select one offered skill identifier.",
+        "options": {
+          "optional": "optional",
+          "none": "none"
+        }
+      }
+    },
+    "catalogSnapshotId": "83703c6077ee5b4398360412b90ecee1095d5764d4c20c55d7f45086b7a4be10",
+    "policyVersion": "task",
+    "deadlineMs": 30000,
+    "retryBudget": 2,
+    "requestedModel": "fixture",
+    "providerMode": "recorded",
+    "stateHash": "fe698f017f6e593f30113079ba88f7e56992be8fd146547f25a5183b35ae1241",
+    "questionSetHash": "8457e10b6dbd56ae4d7c5117c6c316bb6b2acb5fbbed36f314b3b3b5f200405f",
+    "providerContractHash": "36d1ec5ddf0812a7714a59ff24b7460338190d24835c9e66fb6eff6d05f5fc58",
+    "sdkVersion": "36d1ec5ddf0812a7714a59ff24b7460338190d24835c9e66fb6eff6d05f5fc58",
+    "responseHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "fixtureVersion": "yfere-recorded/v1",
+    "fixtureHash": "1cd88f30529c8430818d3bb0d4340df11883269cc45ac7595423967f982fe7d9",
+    "provenance": "synthetic",
+    "response": {
+      "decisionId": "d243307429197edf14422459dc0dcfd643d131eeae7540b3b9621cd0221c12d2",
+      "logicalCallId": "6e26a464909c0b10231be0f6c7ea715b8ccc8e4658b7f33621c65af92b25e25e",
+      "provider": "fixture",
+      "requestedModel": "fixture",
+      "answers": {
+        "skill:writer": {
+          "kind": "choice",
+          "winner": "none",
+          "distribution": {
+            "none": 1,
+            "optional": 0
+          }
+        }
+      },
+      "elapsedMs": 0,
+      "attempts": 1,
+      "provenance": "synthetic",
+      "providerContractHash": "36d1ec5ddf0812a7714a59ff24b7460338190d24835c9e66fb6eff6d05f5fc58",
+      "sdkVersion": "36d1ec5ddf0812a7714a59ff24b7460338190d24835c9e66fb6eff6d05f5fc58",
+      "responseHash": "924fdb9fc77b078084d3ecc07bccc7345aa69a94cb5622536c29458e80c38d08"
+    }
+  }
+]
