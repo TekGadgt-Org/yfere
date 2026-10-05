@@ -1,8 +1,11 @@
+import { hashManifest } from './canonical.js';
 import type { DecisionRequest, Question } from './contracts.js';
 
 export type SystemOnePayload = { model: string; state: unknown; questions: Record<string, unknown> };
 export type TypeSafeTransportResult = { body: unknown; requestId?: string; status?: number };
 export type TypeSafeTransport = (payload: SystemOnePayload, options: { signal: AbortSignal; retry: { maxRetries: 0 } }) => Promise<TypeSafeTransportResult>;
+
+export const correlationKey = (request: DecisionRequest, key: string) => `${key}::${hashManifest('yfere/typesafe-correlation/v1', { logicalCallId: request.logicalCallId, decisionId: request.decisionId, providerContractHash: request.providerContractHash, key })}`;
 
 const safeRecord = (value: Record<string, unknown>) => Object.fromEntries(Object.keys(value).map(k => [k, value[k]]));
 const questionWire = (question: Question): unknown => {
@@ -12,4 +15,8 @@ const questionWire = (question: Question): unknown => {
 };
 export const projectSystemOneRequest = (request: DecisionRequest, model: string): SystemOnePayload => ({
   model, state: request.state, questions: Object.fromEntries(Object.entries(request.questions).map(([key, value]) => [key, questionWire(value as Question)])),
- });
+});
+
+export const projectCorrelatedRequest = (request: DecisionRequest, model: string): SystemOnePayload => ({
+  model, state: request.state, questions: Object.fromEntries(Object.entries(request.questions).map(([key, value]) => [correlationKey(request, key), questionWire(value as Question)])),
+});

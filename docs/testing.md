@@ -64,3 +64,8 @@ git rev-parse HEAD^
 ```
 
 A clean result has no output from `git status --short`. The commit must have the accepted Phase 5 implementation commit `b07dd75bf0221d0bc83d77c7d197464d1d99030d` as its parent (or preserve that exact implementation as the parent in the successor history). No source, test, dependency, lockfile, configuration, or generated-build files are part of this documentation change.
+## TypeSafe hermetic matrix
+
+`tests/typesafe-jev.test.ts` is intentionally offline. Provider calls are supplied by an injected mock transport only. The TypeSafe adapter is tested at construction and evaluation boundaries, including provider-mode selection, pinned/alias model identity, correlated all-and-only answer mapping, choice and score distributions, shared response admission/hash checks, fixed status/error mapping, retry cap and zero SDK retries, deadline races against non-cooperative calls and backoff, cancellation precedence, sanitized request metadata, and zero-egress construction. The public barrels expose neither System One projector/wire types nor credential-bearing transport objects.
+
+No test in this phase authorizes an endpoint, reads credentials, discovers models, emits telemetry, persists data, mutates a project, or performs a live network request. Those capabilities remain explicitly out of scope.

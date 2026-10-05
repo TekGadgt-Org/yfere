@@ -34,9 +34,9 @@ Field-wise pins bypass only the corresponding inference: valid pins remain subje
 
 ## Phase 6 hermetic TypeSafe transport
 
-`yfere/decisions` also contains the internal `TypeSafeDecisionService`. It projects bounded yfere requests into the pinned System One wire shape and accepts only an injected transport; it never constructs the vendor client, reads TypeSafe environment variables, or uses global network APIs. Responses are strictly mapped and admitted through the same response hash and closed-answer boundary as recorded decisions. The adapter owns a bounded retry budget, one logical deadline, and cancellation precedence, with SDK retries represented as zero at the transport seam.
+`yfere/decisions` also contains the internal `TypeSafeDecisionService`, identified to the selector as provider mode `typesafe-jev` (recorded replay remains `recorded`). It projects bounded yfere requests into a correlation-qualified System One wire shape and accepts only an injected transport; it never constructs the vendor client, reads TypeSafe environment variables, or uses global network APIs. Responses require exactly the correlated answer, probability, and score-legend keys, are strictly mapped, and are admitted through the same response hash and closed-answer boundary as recorded decisions. The adapter owns a hard maximum of four physical attempts, rejects larger request retry budgets, uses one monotonic logical deadline with forced races even for non-cooperative transports, and gives cancellation precedence; SDK retries are represented as zero at the transport seam.
 
-The pinned package contract is `@typesafe-ai/sdk` 0.6.0 (MIT); this install is package/license evidence only. Phase 6 is synthetic/mock-first: live credentials, endpoints, account access, model discovery, telemetry, and runtime egress remain explicitly gated and unavailable.
+The pinned package contract is `@typesafe-ai/sdk` 0.6.0 (MIT); this install is package/license evidence only. Pinned model responses must match exactly. Alias responses must carry an independently returned concrete `jev-X.Y.Z` identity; the adapter never fabricates an alias resolution. Phase 6 is synthetic/mock-first: live credentials, endpoints, account access, model discovery, telemetry, and runtime egress remain explicitly gated and unavailable.
 
 ## Not implemented
 
