@@ -3,10 +3,30 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./dist/index.js", "./decisions": "./dist/decisions/index.js", "./policy": "./dist/policy/index.js", "./selection": "./dist/selection/index.js" },
+  "exports": {
+    ".": "./dist/index.js",
+    "./decisions": "./dist/decisions/index.js",
+    "./policy": "./dist/policy/index.js",
+    "./selection": "./dist/selection/index.js"
+  },
   "packageManager": "pnpm@9.15.5",
-  "engines": {"node": ">=20"},
-  "scripts": {"typecheck":"tsc --noEmit", "test":"vitest run", "build":"tsc", "start":"node dist/cli/index.js"},
-  "dependencies": {"zod":"3.24.2","yaml":"2.7.0"},
-  "devDependencies": {"@types/node":"22.13.4","typescript":"5.7.3","vitest":"3.0.5"}
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc",
+    "start": "node dist/cli/index.js"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0",
+    "yaml": "2.7.0",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.4",
+    "typescript": "5.7.3",
+    "vitest": "3.0.5"
+  }
 }

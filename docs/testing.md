@@ -22,10 +22,11 @@ pnpm exec vitest run tests/catalog.test.ts
 pnpm exec vitest run tests/decisions.test.ts
 pnpm exec vitest run tests/policy.test.ts
 pnpm exec vitest run tests/selection.test.ts
+pnpm exec vitest run tests/typesafe-jev.test.ts
 pnpm test
 ```
 
-The focused files cover the offline core/config CLI, catalogs, recorded decisions, policy, and Phase 5 selection respectively. The full command runs all five files. Test totals are intentionally not hard-coded here: Vitest's exact count is the evidence for the checked-out successor and can change with a test-only change.
+The focused files cover the offline core/config CLI, catalogs, recorded decisions, policy, Phase 5 selection, and the Phase 6 injected TypeSafe transport respectively. The TypeSafe lane is hermetic and must not be changed into a live-provider test. Test totals are intentionally not hard-coded here: Vitest's exact count is the evidence for the checked-out successor and can change with a test-only change.
 
 ## Built-package import smoke checks
 
