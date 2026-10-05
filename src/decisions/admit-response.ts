@@ -24,7 +24,7 @@ export function admitDecisionResponse(request: DecisionRequest, value: unknown):
     || response.requestedModel !== request.requestedModel
     || response.providerContractHash !== request.providerContractHash
     || response.sdkVersion !== request.sdkVersion
-    || (response.responseHash !== '0'.repeat(64) && response.responseHash !== actualResponseHash)
+    || response.responseHash !== actualResponseHash
     || (request.responseHash !== '0'.repeat(64) && response.responseHash !== request.responseHash)) {
     throw typedError('INVALID_DECISION', 'response');
   }

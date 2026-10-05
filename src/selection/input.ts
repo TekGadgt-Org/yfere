@@ -43,7 +43,8 @@ export function normalizeSelectorInput(value: unknown): SelectorInput {
   }
   const generation = value.generation ?? replan?.generation ?? 0;
   if (generation !== 0 && generation !== 1 || generation === 1 && !replan || generation === 0 && replan) throw new SelectorError('REPLAN_EXHAUSTED', 'invalid generation');
-  const { decisionService: _service, signal: _signal, ...serializable } = value;
-  const data = copyData({ ...serializable, catalog, policy: policy.data, ...(replan ? { replan } : {}) }) as any;
+  const { decisionService: _service, signal: _signal, replan: _replan, ...serializable } = value;
+  const data = copyData({ ...serializable, catalog, policy: policy.data }) as any;
+  if (replan) data.replan = replan;
   return { ...data, decisionService: value.decisionService, signal: value.signal } as SelectorInput;
 }
