@@ -1,11 +1,11 @@
 import { detached, publicId, type PolicyInput, type TeamResult, type Exclusion } from './contracts.js';
-import { evaluateEligibilityInternal, sanitizeEligibilityResult } from './eligibility.js';
+import { canonicalizeCandidates, evaluateEligibilityInternal, sanitizeEligibilityResult } from './eligibility.js';
 
 export function reconcileTeam(input:PolicyInput): TeamResult {
   const base = evaluateEligibilityInternal(input);
   if (base.kind !== 'accepted') return sanitizeEligibilityResult(base);
   const exclusions: Exclusion[] = [...base.exclusions];
-  const members = [...base.eligible].map(member => ({ ...member, artifacts:[...new Map(member.artifacts.map(artifact => [artifact.artifactId, artifact])).values()] })).sort((a,b) => a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0);
+  const members = canonicalizeCandidates(base.eligible).map(member => ({ ...member, artifacts:[...new Map(member.artifacts.map(artifact => [artifact.artifactId, artifact])).values()] }));
   if (members.length > input.policy.maxAgents) exclusions.push({ code:'BUDGET_EXCEEDED', candidateId:'roster' });
   let total: number | 'unknown' = 0; let overflow = false;
   for (const member of members) {

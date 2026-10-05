@@ -25,7 +25,7 @@ describe('phase 4 policy', () => {
     const secret = `runtime-${randomUUID().replaceAll('-', '')}-secret`;
     const result = evaluateEligibility({ catalog: twoCatalog, policy: policy({ maxAgents: 2 }), candidates: [candidate({ candidateId: secret }), candidate({ candidateId: 'another-raw-id', personaId: 'second-persona' })] as any });
     expect(result.kind).toBe('accepted');
-    expect(result.eligible.map(member => member.personaId)).toEqual(['second-persona', 'persona']);
+    expect(result.eligible.map(member => member.personaId)).toEqual(['persona', 'second-persona']);
     expect(new Set(result.eligible.map(member => member.candidateId)).size).toBe(2);
     expect(JSON.stringify(result)).not.toContain(secret);
   });
@@ -131,5 +131,19 @@ describe('phase 4 policy', () => {
     expect(accepted.personaId).toBe(longPersonaId);
     expect(accepted.modelId).toBe(longModelId);
     expect(candidateSchema.safeParse(accepted).success).toBe(true);
+  });
+  it('canonicalizes accepted projection when raw candidate IDs and relation inputs are reordered', () => {
+    const secondPersona = { ...persona, id: 'second-persona', reviewIndependence: true };
+    const c = loadCatalogSnapshot([{ format: 'json', text: JSON.stringify({ kind: 'skills', version: '1.0.0', records: [skill] }) }, { format: 'json', text: JSON.stringify({ kind: 'models', version: '1.0.0', records: [model()] }) }, { format: 'json', text: JSON.stringify({ kind: 'personas', version: '1.0.0', records: [persona, secondPersona] }) }]);
+    const first = candidate({ candidateId: 'same-raw-id', artifacts: [{ artifactId: 'artifact-a1', owner: 'persona' }, { artifactId: 'artifact-a2', owner: 'persona' }], reviews: [{ artifactId: 'artifact-b1', producerPersonaId: 'second-persona', reviewerPersonaId: 'persona' }, { artifactId: 'artifact-b2', producerPersonaId: 'second-persona', reviewerPersonaId: 'persona' }] });
+    const second = candidate({ candidateId: 'same-raw-id', personaId: 'second-persona', artifacts: [{ artifactId: 'artifact-b1', owner: 'persona' }, { artifactId: 'artifact-b2', owner: 'persona' }], reviews: [{ artifactId: 'artifact-a1', producerPersonaId: 'persona', reviewerPersonaId: 'second-persona' }, { artifactId: 'artifact-a2', producerPersonaId: 'persona', reviewerPersonaId: 'second-persona' }] });
+    const input = { catalog: c, policy: policy({ maxAgents: 2, reviewRequired: true, requiredCapabilities: [], requiredTools: [] }), candidates: [first, second] as any };
+    const reversed = { ...input, candidates: [{ ...second, artifacts: [...second.artifacts].reverse(), reviews: [...second.reviews].reverse() }, { ...first, artifacts: [...first.artifacts].reverse(), reviews: [...first.reviews].reverse() }] as any };
+    const result = reconcileTeam(input);
+    const reversedResult = reconcileTeam(reversed);
+    expect(result).toEqual(reversedResult);
+    expect(result.eligible.map(member => member.personaId)).toEqual(['persona', 'second-persona']);
+    expect(result.eligible.flatMap(member => member.artifacts.map(artifact => artifact.artifactId))).toEqual(['artifact-ref-0', 'artifact-ref-1', 'artifact-ref-2', 'artifact-ref-3']);
+    expect(result.eligible.flatMap(member => member.reviews.map(review => review.artifactId))).toEqual(['artifact-ref-2', 'artifact-ref-3', 'artifact-ref-0', 'artifact-ref-1']);
   });
 });

@@ -1,6 +1,18 @@
 import { candidateSchema, detached, exclusion, policySchema, publicId, type Exclusion, type EligibilityResult, type PolicyInput, type ProposedCandidate } from './contracts.js';
 
 const compare = (a:string,b:string) => a < b ? -1 : a > b ? 1 : 0;
+const compareTuple = (left: readonly string[], right: readonly string[]) => {
+  for (let i = 0; i < left.length; i++) {
+    const result = compare(left[i]!, right[i]!);
+    if (result) return result;
+  }
+  return 0;
+};
+export const canonicalizeCandidates = (candidates: readonly ProposedCandidate[]): ProposedCandidate[] => candidates.map(candidate => ({
+  ...candidate,
+  artifacts: [...candidate.artifacts].sort((a, b) => compare(a.artifactId, b.artifactId)),
+  reviews: [...candidate.reviews].sort((a, b) => compareTuple([a.artifactId, a.producerPersonaId, a.reviewerPersonaId], [b.artifactId, b.producerPersonaId, b.reviewerPersonaId])),
+})).sort((a, b) => compareTuple([a.personaId, a.modelId], [b.personaId, b.modelId]));
 const sortExclusions = (items:Exclusion[]) => items.sort((a,b) => {
   const left = [a.candidateId,a.code,a.personaId ?? '',a.modelId ?? '',a.skillId ?? '',a.artifactId ?? ''];
   const right = [b.candidateId,b.code,b.personaId ?? '',b.modelId ?? '',b.skillId ?? '',b.artifactId ?? ''];
@@ -30,7 +42,7 @@ export function sanitizeEligibilityResult(result: EligibilityResult): Eligibilit
       reviewerPersonaId: trustedPersonas.has(review.reviewerPersonaId) ? review.reviewerPersonaId : '[REDACTED]',
     })),
   });
-  const eligible = result.kind === 'accepted' ? result.eligible.map(sanitizeAcceptedCandidate) : [];
+  const eligible = result.kind === 'accepted' ? canonicalizeCandidates(result.eligible).map(sanitizeAcceptedCandidate) : [];
   return detached({ ...result, eligible, exclusions: result.exclusions.map(x => ({ ...x, candidateId: '[REDACTED]', personaId: x.personaId ? '[REDACTED]' : undefined, modelId: x.modelId ? '[REDACTED]' : undefined, skillId: x.skillId ? '[REDACTED]' : undefined, artifactId: x.artifactId ? '[REDACTED]' : undefined })) }) as EligibilityResult;
 }
 export function evaluateEligibilityInternal(input:PolicyInput): EligibilityResult {
@@ -93,7 +105,7 @@ export function evaluateEligibilityInternal(input:PolicyInput): EligibilityResul
   if (duplicatePersona || distinct.size !== eligible.length) exclusions.push({ code:'INSUFFICIENT_ELIGIBLE_PERSONAS', candidateId:'roster' });
   if (exclusions.some(x => x.code === 'MANDATORY_PERSONA_INELIGIBLE')) return { kind:'abstained', code:'MANDATORY_PERSONA_INELIGIBLE', eligible:[], exclusions:sortExclusions(exclusions) };
   if (duplicatePersona) return { kind:'abstained', code:'INSUFFICIENT_ELIGIBLE_PERSONAS', eligible:[], exclusions:sortExclusions(exclusions) };
-  sortExclusions(exclusions); eligible.sort((a,b) => compare(a.candidateId,b.candidateId));
+  sortExclusions(exclusions); eligible.splice(0, eligible.length, ...canonicalizeCandidates(eligible));
   if (!eligible.length) return { kind:'abstained', code:'NO_MATCH', eligible:[], exclusions: exclusions.length ? exclusions : [{ code:'NO_MATCH', candidateId:'none' }] };
   if (policy.admissionPolicy === 'exact' && distinct.size < policy.maxAgents) return { kind:'abstained', code:'INSUFFICIENT_ELIGIBLE_PERSONAS', eligible:[], exclusions: [...exclusions, { code:'INSUFFICIENT_ELIGIBLE_PERSONAS', candidateId:'roster' }] };
   return { kind:'accepted', eligible, exclusions };
