@@ -1,6 +1,6 @@
 # Testing yfere
 
-Run these commands from the repository root. They are the verification recipe for the exact Phase 5 successor. The install is offline and uses the checked-in pnpm lockfile; no provider, credential, or network call is required.
+Run these commands from the repository root. They are the verification recipe for the currently implemented Phase 1–6 surface. The install is offline and uses the checked-in pnpm lockfile; no provider, credential, or network call is required.
 
 ## Install and static checks
 
@@ -55,15 +55,18 @@ node -e "const fs=require('node:fs'); const path=require('node:path'); const fil
 git diff --check
 ```
 
-After the documentation-only commit, confirm the worktree is clean and record the commit/tree/parent in the handoff:
+Before publication, confirm the worktree is clean and record the commit, tree, parent, and merge base in the handoff:
 
 ```sh
 git status --short
+git rev-parse HEAD
 git rev-parse HEAD^{tree}
 git rev-parse HEAD^
+git merge-base HEAD origin/main
 ```
 
-A clean result has no output from `git status --short`. The commit must have the accepted Phase 5 implementation commit `b07dd75bf0221d0bc83d77c7d197464d1d99030d` as its parent (or preserve that exact implementation as the parent in the successor history). No source, test, dependency, lockfile, configuration, or generated-build files are part of this documentation change.
+A clean result has no output from `git status --short`. Record the exact identities rather than assuming a historical phase commit remains the direct parent after later implementation and documentation successors.
+
 ## TypeSafe hermetic matrix
 
 `tests/typesafe-jev.test.ts` is intentionally offline. Provider calls are supplied by an injected mock transport only. The TypeSafe adapter is tested at construction and evaluation boundaries, including provider-mode selection, pinned/alias model identity, correlated all-and-only answer mapping, choice and score distributions, shared response admission/hash checks, fixed status/error mapping, retry cap and zero SDK retries, deadline races against non-cooperative calls and backoff, cancellation precedence, sanitized request metadata, and zero-egress construction. The public barrels expose neither System One projector/wire types nor credential-bearing transport objects.
