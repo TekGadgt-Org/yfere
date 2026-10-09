@@ -32,6 +32,12 @@ Policy does not select semantic winners, call providers, read credentials, acces
 
 Field-wise pins bypass only the corresponding inference: valid pins remain subject to all hard validation and compatibility checks. A model pin constrains skill choices; explicit skill arrays are exact and may suppress skill inference; invalid, unavailable, unauthorized, incompatible, or unknown IDs fail closed. The generation/replan inputs preserve an explicitly bounded replan lineage; no implicit loop is created. Selection accepts recorded/deterministic `DecisionService` answers only and never creates a live client, uses network access, persists decisions, or executes agents.
 
+## Phase 6 hermetic TypeSafe transport
+
+`yfere/decisions` also contains the internal `TypeSafeDecisionService`, identified to the selector as provider mode `typesafe-jev` (recorded replay remains `recorded`). It projects bounded yfere requests into a correlation-qualified System One wire shape and accepts only an injected transport; it never constructs the vendor client, reads TypeSafe environment variables, or uses global network APIs. Responses require exactly the correlated answer, probability, and score-legend keys, are strictly mapped, and are admitted through the same response hash and closed-answer boundary as recorded decisions. The adapter owns a hard maximum of four physical attempts, rejects larger request retry budgets, uses one monotonic logical deadline with forced races even for non-cooperative transports, and gives cancellation precedence; SDK retries are represented as zero at the transport seam.
+
+The pinned package contract is `@typesafe-ai/sdk` 0.6.0 (MIT); this install is package/license evidence only. Pinned model responses must match exactly. Alias responses must carry an independently returned concrete `jev-X.Y.Z` identity; the adapter never fabricates an alias resolution. Phase 6 is synthetic/mock-first: live credentials, endpoints, account access, model discovery, telemetry, and runtime egress remain explicitly gated and unavailable.
+
 ## Not implemented
 
 Provider transport/authentication, live Jev, task-agent execution, browser execution, SQLite or other persistence, telemetry, unrestricted network integrations, catalog CLI commands, fallback/backfill, and mutation of real projects are outside this implementation. Future architecture notes must not be read as runtime availability.
